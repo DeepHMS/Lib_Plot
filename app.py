@@ -10,7 +10,6 @@ st.set_page_config(page_title="Adaptive Method Optimization", layout="wide")
 st.title("Adaptive Density Optimization for dia-PASEF")
 
 # --- INITIALIZE SESSION STATE ---
-# This keeps track of what phase of the app the user is currently in.
 if 'phase' not in st.session_state:
     st.session_state.phase = 1
 if 'locked_boundaries' not in st.session_state:
@@ -72,24 +71,41 @@ if uploaded_file is not None:
         mz_vals, im_vals, density = load_and_process_data(uploaded_file)
         x_start, x_end, m_top_init, c_top_init, m_bot_init, c_bot_init = calculate_initial_boundaries(mz_vals, im_vals)
 
+    # --- GLOBAL APPEARANCE CONTROLS (Restored) ---
+    st.sidebar.header("2. Plot Appearance & Axis Limits")
+    marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=4, step=1)
+    
+    st.sidebar.subheader("Axis Limits")
+    col_x1, col_x2 = st.sidebar.columns(2)
+    x_axis_min = col_x1.number_input("X Min (m/z)", value=float(min(mz_vals) - 50))
+    x_axis_max = col_x2.number_input("X Max (m/z)", value=float(max(mz_vals) + 50))
+
+    col_y1, col_y2 = st.sidebar.columns(2)
+    y_axis_min = col_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
+    y_axis_max = col_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
+
     # -------------------------------------------------------------------------
     # PHASE 1: BOUNDARY SELECTION
     # -------------------------------------------------------------------------
     if st.session_state.phase == 1:
-        st.sidebar.header("2. Set Polygon Boundaries")
+        st.sidebar.header("3. Set Polygon Boundaries")
         
         init_y_ts = m_top_init * x_start + c_top_init
         init_y_te = m_top_init * x_end + c_top_init
         init_y_bs = m_bot_init * x_start + c_bot_init
         init_y_be = m_bot_init * x_end + c_bot_init
 
-        y_min_limit, y_max_limit = float(min(im_vals) - 0.2), float(max(im_vals) + 0.2)
+        # Safety clip to ensure sliders don't break if user shrinks axes
+        val_ts = float(np.clip(init_y_ts, y_axis_min, y_axis_max))
+        val_te = float(np.clip(init_y_te, y_axis_min, y_axis_max))
+        val_bs = float(np.clip(init_y_bs, y_axis_min, y_axis_max))
+        val_be = float(np.clip(init_y_be, y_axis_min, y_axis_max))
 
-        top_y_start = st.sidebar.slider(f"Top Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_ts), 0.001)
-        top_y_end = st.sidebar.slider(f"Top End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_te), 0.001)
+        top_y_start = st.sidebar.slider(f"Top Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_ts, 0.001, format="%.4f")
+        top_y_end = st.sidebar.slider(f"Top End (x={x_end:.0f})", y_axis_min, y_axis_max, val_te, 0.001, format="%.4f")
         st.sidebar.divider()
-        bot_y_start = st.sidebar.slider(f"Bottom Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_bs), 0.001)
-        bot_y_end = st.sidebar.slider(f"Bottom End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_be), 0.001)
+        bot_y_start = st.sidebar.slider(f"Bottom Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_bs, 0.001, format="%.4f")
+        bot_y_end = st.sidebar.slider(f"Bottom End (x={x_end:.0f})", y_axis_min, y_axis_max, val_be, 0.001, format="%.4f")
 
         # Calculate live slopes
         m_top = (top_y_end - top_y_start) / (x_end - x_start)
@@ -97,14 +113,20 @@ if uploaded_file is not None:
         m_bot = (bot_y_end - bot_y_start) / (x_end - x_start)
         c_bot = bot_y_start - (m_bot * x_start)
 
+        # Extend lines infinitely based on user's custom X limits (Restored)
+        view_top_start = (m_top * x_axis_min) + c_top
+        view_top_end = (m_top * x_axis_max) + c_top
+        view_bot_start = (m_bot * x_axis_min) + c_bot
+        view_bot_end = (m_bot * x_axis_max) + c_bot
+
         # Plot Phase 1
         col1, col2 = st.columns([3, 1])
         with col1:
             fig = go.Figure()
-            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.6, size=4), name='Precursors'))
-            fig.add_trace(go.Scatter(x=[x_start, x_end], y=[top_y_start, top_y_end], mode='lines', line=dict(color='red', width=3), name='Upper Bound'))
-            fig.add_trace(go.Scatter(x=[x_start, x_end], y=[bot_y_start, bot_y_end], mode='lines', line=dict(color='red', width=3), name='Lower Bound'))
-            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", height=600)
+            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.6, size=marker_size), name='Precursors'))
+            fig.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_top_start, view_top_end], mode='lines', line=dict(color='red', width=3), name='Upper Bound', hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_bot_start, view_bot_end], mode='lines', line=dict(color='red', width=3), name='Lower Bound', hoverinfo='skip'))
+            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=600)
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
@@ -128,33 +150,31 @@ if uploaded_file is not None:
     elif st.session_state.phase == 2:
         st.sidebar.header("3. Method Development Limits")
         st.sidebar.success("🔒 Boundaries Locked.")
-
-        mz_data_min, mz_data_max = float(min(mz_vals)), float(max(mz_vals))
         
         # User sets constraints
-        mz_min = st.sidebar.number_input("Min m/z", value=mz_data_min, min_value=mz_data_min)
-        mz_max = st.sidebar.number_input("Max m/z", value=mz_data_max, max_value=mz_data_max)
+        mz_min = st.sidebar.number_input("Min m/z for Method", value=x_axis_min, min_value=x_axis_min)
+        mz_max = st.sidebar.number_input("Max m/z for Method", value=x_axis_max, max_value=x_axis_max)
         num_windows = st.sidebar.slider("Number of Vertical Bins", min_value=10, max_value=100, value=30)
 
-        # Draw the locked polygon
+        # Draw the locked polygon extending to user visual limits
         b = st.session_state.locked_boundaries
-        y_top_start = b['m_top'] * b['x_start'] + b['c_top']
-        y_top_end = b['m_top'] * b['x_end'] + b['c_top']
-        y_bot_start = b['m_bot'] * b['x_start'] + b['c_bot']
-        y_bot_end = b['m_bot'] * b['x_end'] + b['c_bot']
+        view_top_start = b['m_top'] * x_axis_min + b['c_top']
+        view_top_end = b['m_top'] * x_axis_max + b['c_top']
+        view_bot_start = b['m_bot'] * x_axis_min + b['c_bot']
+        view_bot_end = b['m_bot'] * x_axis_max + b['c_bot']
 
         col1, col2 = st.columns([3, 1])
         with col1:
             fig = go.Figure()
-            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.4, size=3), name='Precursors'))
-            fig.add_trace(go.Scatter(x=[b['x_start'], b['x_end']], y=[y_top_start, y_top_end], mode='lines', line=dict(color='red', width=2), name='Locked Upper Bound'))
-            fig.add_trace(go.Scatter(x=[b['x_start'], b['x_end']], y=[y_bot_start, y_bot_end], mode='lines', line=dict(color='red', width=2), name='Locked Lower Bound'))
+            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.4, size=marker_size), name='Precursors'))
+            fig.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_top_start, view_top_end], mode='lines', line=dict(color='red', width=2), name='Locked Upper Bound'))
+            fig.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_bot_start, view_bot_end], mode='lines', line=dict(color='red', width=2), name='Locked Lower Bound'))
             
             # Highlight chosen m/z limits with vertical dashed lines
             fig.add_vline(x=mz_min, line_dash="dash", line_color="black")
             fig.add_vline(x=mz_max, line_dash="dash", line_color="black")
             
-            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", height=600)
+            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=600)
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
@@ -179,20 +199,16 @@ if uploaded_file is not None:
             reset_app()
             st.rerun()
 
-        # Extract variables
         b = st.session_state.locked_boundaries
         p = st.session_state.method_params
         
         # --- CORE ADAPTIVE DENSITY LOGIC ---
-        # 1. Filter precursors within the chosen m/z range
         mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
         filtered_mz = np.sort(mz_vals[mask])
         
-        # 2. Chop into equal precursor chunks (Density Adaptive)
         quantiles = np.linspace(0, 1, p['num_windows'] + 1)
         mz_edges = np.quantile(filtered_mz, quantiles)
         
-        # 3. Generate Vertical Bins restricted by Polygon
         method_export = []
         rectangles = []
 
@@ -200,8 +216,6 @@ if uploaded_file is not None:
             x_left = mz_edges[i]
             x_right = mz_edges[i+1]
             
-            # To ensure the rectangle encompasses the sloped polygon inside this bin:
-            # Evaluate the top/bottom lines at both edges and take the absolute max/min
             y_top_left = b['m_top'] * x_left + b['c_top']
             y_top_right = b['m_top'] * x_right + b['c_top']
             y_bot_left = b['m_bot'] * x_left + b['c_bot']
@@ -225,10 +239,8 @@ if uploaded_file is not None:
         col1, col2 = st.columns([3, 1])
         with col1:
             fig = go.Figure()
-            # 1. Cloud
-            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color='gray', opacity=0.2, size=3), name='Precursors', hoverinfo='skip'))
+            fig.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color='gray', opacity=0.2, size=marker_size), name='Precursors', hoverinfo='skip'))
             
-            # 2. Red Polygon (Constrained to user m/z min/max)
             poly_y_top1 = b['m_top'] * p['mz_min'] + b['c_top']
             poly_y_top2 = b['m_top'] * p['mz_max'] + b['c_top']
             poly_y_bot1 = b['m_bot'] * p['mz_min'] + b['c_bot']
@@ -240,16 +252,15 @@ if uploaded_file is not None:
                 mode='lines', line=dict(color='red', width=3), name='User Polygon'
             ))
 
-            # 3. Light Purple Bins
             for x1, x2, y1, y2 in rectangles:
                 fig.add_trace(go.Scatter(
                     x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                     mode='lines', line=dict(color='purple', width=1),
-                    fill='toself', fillcolor='rgba(177, 156, 217, 0.4)', # Light Purple
+                    fill='toself', fillcolor='rgba(177, 156, 217, 0.4)',
                     hoverinfo='skip', showlegend=False
                 ))
 
-            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", height=700,
+            fig.update_layout(xaxis_title="Mass (m/z)", yaxis_title="Mobility (1/K0)", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=700,
                               title="Adaptive Density Rectangles (Narrow = High Density, Wide = Low Density)")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -257,7 +268,6 @@ if uploaded_file is not None:
             st.success("Optimization Complete!")
             st.markdown("Notice how the light purple bins shrink tightly in the dense core, but expand widely in sparse areas—all while perfectly respecting your red polygon.")
             
-            # Download Final Method
             csv_buffer = io.StringIO()
             method_df.to_csv(csv_buffer, index=False)
             st.download_button("📥 Download Final dia-PASEF Windows", data=csv_buffer.getvalue(), file_name="Adaptive_diaPASEF_Method.csv", mime="text/csv", use_container_width=True)
