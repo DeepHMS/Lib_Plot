@@ -67,22 +67,8 @@ if uploaded_file is not None:
         mz_vals, im_vals, density = load_and_process_data(uploaded_file)
         x_start, x_end, init_y_ts, init_y_te, init_y_bs, init_y_be = calculate_initial_boundaries(mz_vals, im_vals)
 
-    # 2. Boundary Controls
-    st.sidebar.header("2. Adjust Boundaries")
-    
-    y_min_limit = float(min(im_vals) - 0.2)
-    y_max_limit = float(max(im_vals) + 0.2)
-
-    top_y_start = st.sidebar.slider(f"Top Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_ts), 0.001, format="%.4f")
-    top_y_end = st.sidebar.slider(f"Top End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_te), 0.001, format="%.4f")
-    
-    st.sidebar.divider()
-    
-    bot_y_start = st.sidebar.slider(f"Bottom Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_bs), 0.001, format="%.4f")
-    bot_y_end = st.sidebar.slider(f"Bottom End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_be), 0.001, format="%.4f")
-
-    # 3. Plot Appearance Controls (NEW SECTION)
-    st.sidebar.header("3. Plot Appearance")
+    # --- REORDERED: Plot Appearance & Axis Limits come FIRST ---
+    st.sidebar.header("2. Plot Appearance & Axis Limits")
     
     marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=4, step=1)
     
@@ -92,18 +78,37 @@ if uploaded_file is not None:
     x_axis_max = col_x2.number_input("X Max (m/z)", value=float(max(mz_vals) + 50))
 
     col_y1, col_y2 = st.sidebar.columns(2)
+    # These Y limits now dictate the slider boundaries
     y_axis_min = col_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
     y_axis_max = col_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
 
+    # --- REORDERED: Boundaries now rely on the Axis Limits ---
+    st.sidebar.header("3. Adjust Boundaries")
+    st.sidebar.markdown("*Tip: These sliders dynamically adapt to your Y-Axis limits.*")
+    
+    # SAFETY NET: Clip the initial automated values to ensure they don't break the sliders if the user shrinks the axes
+    val_ts = float(np.clip(init_y_ts, y_axis_min, y_axis_max))
+    val_te = float(np.clip(init_y_te, y_axis_min, y_axis_max))
+    val_bs = float(np.clip(init_y_bs, y_axis_min, y_axis_max))
+    val_be = float(np.clip(init_y_be, y_axis_min, y_axis_max))
+
+    # Sliders now use y_axis_min and y_axis_max as their absolute boundaries
+    top_y_start = st.sidebar.slider(f"Top Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_ts, 0.001, format="%.4f")
+    top_y_end = st.sidebar.slider(f"Top End (x={x_end:.0f})", y_axis_min, y_axis_max, val_te, 0.001, format="%.4f")
+    
+    st.sidebar.divider()
+    
+    bot_y_start = st.sidebar.slider(f"Bottom Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_bs, 0.001, format="%.4f")
+    bot_y_end = st.sidebar.slider(f"Bottom End (x={x_end:.0f})", y_axis_min, y_axis_max, val_be, 0.001, format="%.4f")
+
+
     # --- MATH LOGIC: Extend lines to infinity based on user slider inputs ---
-    # Calculate current slope (m) and intercept (c) from the slider positions
     m_top_current = (top_y_end - top_y_start) / (x_end - x_start)
     c_top_current = top_y_start - (m_top_current * x_start)
 
     m_bot_current = (bot_y_end - bot_y_start) / (x_end - x_start)
     c_bot_current = bot_y_start - (m_bot_current * x_start)
 
-    # Calculate where the lines should explicitly start and end based on the user's custom X-axis limits
     view_top_start = (m_top_current * x_axis_min) + c_top_current
     view_top_end = (m_top_current * x_axis_max) + c_top_current
 
@@ -117,7 +122,6 @@ if uploaded_file is not None:
     with col_plot:
         fig = go.Figure()
 
-        # Add Density Scatter
         fig.add_trace(go.Scattergl(
             x=mz_vals,
             y=im_vals,
@@ -126,13 +130,12 @@ if uploaded_file is not None:
                 color=density,
                 colorscale='Jet',
                 opacity=0.6,
-                size=marker_size  # Connected to the new slider
+                size=marker_size
             ),
             name='Precursors',
             hovertemplate='<b>m/z:</b> %{x:.2f}<br><b>1/K0:</b> %{y:.4f}<extra></extra>' 
         ))
 
-        # Add Upper Boundary Line (Using calculated view extremes)
         fig.add_trace(go.Scatter(
             x=[x_axis_min, x_axis_max],
             y=[view_top_start, view_top_end],
@@ -142,7 +145,6 @@ if uploaded_file is not None:
             hoverinfo='skip'
         ))
 
-        # Add Lower Boundary Line (Using calculated view extremes)
         fig.add_trace(go.Scatter(
             x=[x_axis_min, x_axis_max],
             y=[view_bot_start, view_bot_end],
@@ -152,7 +154,6 @@ if uploaded_file is not None:
             hoverinfo='skip'
         ))
 
-        # Format Layout with User-Defined Limits
         fig.update_layout(
             xaxis_title="Mass (m/z)",
             yaxis_title="Mobility (1/K0)",
