@@ -11,7 +11,6 @@ st.title("Interactive Library Ion Cloud Boundaries")
 st.markdown("Upload your proteomics library `.tsv` file to calculate and adjust Ion Mobility boundaries interactively.")
 
 # --- CACHED FUNCTIONS ---
-# This ensures the heavy math (KDE density) only runs ONCE per file upload.
 @st.cache_data
 def load_and_process_data(file):
     df = pd.read_csv(file, sep="\t")
@@ -60,7 +59,6 @@ def calculate_initial_boundaries(mz_vals, im_vals):
     return x_start, x_end, y_top_start, y_top_end, y_bot_start, y_bot_end
 
 # --- MAIN APP UI ---
-# Sidebar for file upload
 st.sidebar.header("1. Upload Data")
 uploaded_file = st.sidebar.file_uploader("Upload Library .tsv", type=['tsv', 'txt', 'csv'])
 
@@ -69,14 +67,12 @@ if uploaded_file is not None:
         mz_vals, im_vals, density = load_and_process_data(uploaded_file)
         x_start, x_end, init_y_ts, init_y_te, init_y_bs, init_y_be = calculate_initial_boundaries(mz_vals, im_vals)
 
-    # 2. UI Controls (Sidebar)
+    # 2. Boundary Controls
     st.sidebar.header("2. Adjust Boundaries")
-    st.sidebar.markdown("*Tip: You can drag the slider or click the number to type exact values.*")
     
     y_min_limit = float(min(im_vals) - 0.2)
     y_max_limit = float(max(im_vals) + 0.2)
 
-    # Sliders
     top_y_start = st.sidebar.slider(f"Top Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_ts), 0.001, format="%.4f")
     top_y_end = st.sidebar.slider(f"Top End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_te), 0.001, format="%.4f")
     
@@ -85,14 +81,43 @@ if uploaded_file is not None:
     bot_y_start = st.sidebar.slider(f"Bottom Start (x={x_start:.0f})", y_min_limit, y_max_limit, float(init_y_bs), 0.001, format="%.4f")
     bot_y_end = st.sidebar.slider(f"Bottom End (x={x_end:.0f})", y_min_limit, y_max_limit, float(init_y_be), 0.001, format="%.4f")
 
-    # 3. Plotting Area
+    # 3. Plot Appearance Controls (NEW SECTION)
+    st.sidebar.header("3. Plot Appearance")
+    
+    marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=4, step=1)
+    
+    st.sidebar.subheader("Axis Limits")
+    col_x1, col_x2 = st.sidebar.columns(2)
+    x_axis_min = col_x1.number_input("X Min (m/z)", value=float(min(mz_vals) - 50))
+    x_axis_max = col_x2.number_input("X Max (m/z)", value=float(max(mz_vals) + 50))
+
+    col_y1, col_y2 = st.sidebar.columns(2)
+    y_axis_min = col_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
+    y_axis_max = col_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
+
+    # --- MATH LOGIC: Extend lines to infinity based on user slider inputs ---
+    # Calculate current slope (m) and intercept (c) from the slider positions
+    m_top_current = (top_y_end - top_y_start) / (x_end - x_start)
+    c_top_current = top_y_start - (m_top_current * x_start)
+
+    m_bot_current = (bot_y_end - bot_y_start) / (x_end - x_start)
+    c_bot_current = bot_y_start - (m_bot_current * x_start)
+
+    # Calculate where the lines should explicitly start and end based on the user's custom X-axis limits
+    view_top_start = (m_top_current * x_axis_min) + c_top_current
+    view_top_end = (m_top_current * x_axis_max) + c_top_current
+
+    view_bot_start = (m_bot_current * x_axis_min) + c_bot_current
+    view_bot_end = (m_bot_current * x_axis_max) + c_bot_current
+
+
+    # --- PLOTTING ---
     col_plot, col_data = st.columns([3, 1])
 
     with col_plot:
-        # Build Plotly Figure
         fig = go.Figure()
 
-        # Add Density Scatter using WebGL for high performance with large datasets
+        # Add Density Scatter
         fig.add_trace(go.Scattergl(
             x=mz_vals,
             y=im_vals,
@@ -101,49 +126,46 @@ if uploaded_file is not None:
                 color=density,
                 colorscale='Jet',
                 opacity=0.6,
-                size=4
+                size=marker_size  # Connected to the new slider
             ),
             name='Precursors',
-            # This enables the free hover data functionality
             hovertemplate='<b>m/z:</b> %{x:.2f}<br><b>1/K0:</b> %{y:.4f}<extra></extra>' 
         ))
 
-        # Add Upper Boundary Line
+        # Add Upper Boundary Line (Using calculated view extremes)
         fig.add_trace(go.Scatter(
-            x=[x_start, x_end],
-            y=[top_y_start, top_y_end],
+            x=[x_axis_min, x_axis_max],
+            y=[view_top_start, view_top_end],
             mode='lines',
             line=dict(color='red', width=3),
             name='Upper Boundary',
-            hoverinfo='skip' # Don't clutter hover box with line data
+            hoverinfo='skip'
         ))
 
-        # Add Lower Boundary Line
+        # Add Lower Boundary Line (Using calculated view extremes)
         fig.add_trace(go.Scatter(
-            x=[x_start, x_end],
-            y=[bot_y_start, bot_y_end],
+            x=[x_axis_min, x_axis_max],
+            y=[view_bot_start, view_bot_end],
             mode='lines',
             line=dict(color='red', width=3),
             name='Lower Boundary',
             hoverinfo='skip'
         ))
 
-        # Format Layout
+        # Format Layout with User-Defined Limits
         fig.update_layout(
             xaxis_title="Mass (m/z)",
             yaxis_title="Mobility (1/K0)",
-            xaxis=dict(range=[min(mz_vals)-50, max(mz_vals)+50]),
-            yaxis=dict(range=[min(im_vals)-0.05, max(im_vals)+0.05]),
+            xaxis=dict(range=[x_axis_min, x_axis_max]),
+            yaxis=dict(range=[y_axis_min, y_axis_max]),
             height=700,
             margin=dict(l=20, r=20, t=30, b=20),
             hovermode="closest"
         )
         
-        # Render in Streamlit
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("📸 *Tip: Hover over the top right corner of the plot and click the camera icon to download this graph as a PNG.*")
 
-    # 4. Results & Downloads Area
+    # --- RESULTS & EXPORT ---
     with col_data:
         st.subheader("Current Coordinates")
         st.markdown(f"**Top Line:**\n* Start: ({x_start:.2f}, {top_y_start:.4f})\n* End: ({x_end:.2f}, {top_y_end:.4f})")
@@ -152,7 +174,6 @@ if uploaded_file is not None:
         st.divider()
         st.subheader("Export Data")
 
-        # Create TXT string for coordinates
         txt_content = (
             "Line,X_Start,Y_Start,X_End,Y_End\n"
             f"Top,{x_start:.2f},{top_y_start:.4f},{x_end:.2f},{top_y_end:.4f}\n"
