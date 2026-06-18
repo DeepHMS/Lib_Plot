@@ -248,7 +248,9 @@ if uploaded_file is not None:
         base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
 
         fig3 = go.Figure()
-        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), hoverinfo='skip', showlegend=False))
+        
+        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), hoverinfo='skip', showlegend=False))
+        
         poly_y_top1, poly_y_top2 = b['m_top'] * p['mz_min'] + b['c_top'], b['m_top'] * p['mz_max'] + b['c_top']
         poly_y_bot1, poly_y_bot2 = b['m_bot'] * p['mz_min'] + b['c_bot'], b['m_bot'] * p['mz_max'] + b['c_bot']
         fig3.add_trace(go.Scatter(x=[p['mz_min'], p['mz_max'], p['mz_max'], p['mz_min'], p['mz_min']], y=[poly_y_top1, poly_y_top2, poly_y_bot2, poly_y_bot1, poly_y_top1], mode='lines', line=dict(color='red', width=3), hoverinfo='skip', showlegend=False))
@@ -256,11 +258,13 @@ if uploaded_file is not None:
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             htext = f"<b>Bin {i+1}</b><br>Precursors: {prec_count}<br>m/z: {x1:.2f} - {x2:.2f}<br>1/K0: {y1:.3f} - {y2:.3f}"
+            
+            # THE FIX: explicit name and hovertemplate, removed hoverinfo='text'
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
                 fill='toself', fillcolor=bin_fill_rgba, 
-                text=[htext]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', name="", showlegend=False
+                text=[htext]*5, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
             ))
         
         fig3.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
@@ -269,7 +273,6 @@ if uploaded_file is not None:
         if st.session_state.phase == 3:
             if st.button("Proceed to Multi-Method Generation", type="primary"):
                 st.session_state.phase = 4
-                # EXPLICITLY CLEAR MEMORY HERE to prevent KeyErrors on legacy state
                 st.session_state.generated_methods = [] 
                 st.rerun()
         else:
@@ -330,7 +333,6 @@ if uploaded_file is not None:
             selected_methods = []
             
             for idx, m_data in enumerate(st.session_state.generated_methods):
-                # SAFETY CHECK to prevent KeyErrors if loading old state
                 if 'rects' not in m_data:
                     st.error("Stale data detected. Please click 'Generate Adaptive Methods' above to refresh.")
                     break
@@ -353,11 +355,12 @@ if uploaded_file is not None:
                                       f"m/z: {x1:.2f} - {x2:.2f}<br>"
                                       f"1/K0: {y1:.3f} - {y2:.3f}")
 
+                        # THE FIX: explicit name and hovertemplate, removed hoverinfo='text'
                         fig_m.add_trace(go.Scatter(
                             x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                             mode='lines', line=dict(color=bin_color_hex, width=1),
                             fill='toself', fillcolor=bin_fill_rgba,
-                            text=[hover_text]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', name="", showlegend=False
+                            text=[hover_text]*5, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
                         ))
                     
                     fig_m.update_layout(title=f"{m_data['name']} ({m_data['cycles']} Cycles)", xaxis_title="m/z", yaxis_title="1/K0", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
