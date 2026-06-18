@@ -99,8 +99,12 @@ if uploaded_file is not None:
     val_bs = float(np.clip(init_y_bs, y_axis_min, y_axis_max))
     val_be = float(np.clip(init_y_be, y_axis_min, y_axis_max))
 
-    # Disable controls if we are past phase 1
     p1_disabled = st.session_state.phase > 1
+
+    # SAFETY NET 1: If Streamlit lost memory, force reset to phase 1
+    if p1_disabled and 'm_top' not in st.session_state.b_state:
+        st.session_state.phase = 1
+        st.rerun()
 
     c1, c2 = st.columns(2)
     top_y_start = c1.slider(f"Top Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_ts, 0.001, format="%.4f", disabled=p1_disabled)
@@ -110,7 +114,6 @@ if uploaded_file is not None:
     bot_y_start = c3.slider(f"Bottom Start (x={x_start:.0f})", y_axis_min, y_axis_max, val_bs, 0.001, format="%.4f", disabled=p1_disabled)
     bot_y_end = c4.slider(f"Bottom End (x={x_end:.0f})", y_axis_min, y_axis_max, val_be, 0.001, format="%.4f", disabled=p1_disabled)
 
-    # Use locked state if past phase 1, otherwise use live sliders
     if p1_disabled:
         m_top = st.session_state.b_state['m_top']
         c_top = st.session_state.b_state['c_top']
@@ -147,6 +150,11 @@ if uploaded_file is not None:
     # PHASE 2: METHOD LIMITS
     # -------------------------------------------------------------------------
     if st.session_state.phase >= 2:
+        # SAFETY NET 2
+        if 'm_top' not in st.session_state.b_state:
+            st.session_state.phase = 1
+            st.rerun()
+
         st.markdown("---")
         st.markdown("### Step 2: Method Development Limits")
         
@@ -186,13 +194,17 @@ if uploaded_file is not None:
     # PHASE 3: ADAPTIVE DENSITY OPTIMIZATION
     # -------------------------------------------------------------------------
     if st.session_state.phase == 3:
+        # SAFETY NET 3
+        if 'mz_min' not in st.session_state.p_state or 'm_top' not in st.session_state.b_state:
+            st.session_state.phase = 1
+            st.rerun()
+
         st.markdown("---")
         st.markdown("### Step 3: Adaptive Density Results")
         
         b = st.session_state.b_state
         p = st.session_state.p_state
         
-        # --- CORE ADAPTIVE DENSITY LOGIC ---
         mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
         filtered_mz = np.sort(mz_vals[mask])
         
@@ -239,9 +251,7 @@ if uploaded_file is not None:
             mode='lines', line=dict(color='red', width=3), name='User Polygon', hoverinfo='skip'
         ))
 
-        # Add Purple Bins with Hover Data
         for i, (x1, x2, y1, y2) in enumerate(rectangles):
-            # Calculate precursors inside this exact bin
             bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
             prec_count = np.sum(bin_mask)
             
@@ -266,7 +276,7 @@ if uploaded_file is not None:
             "1/K0 Start": f"{min([r[2] for r in rectangles]):.4f}",
             "1/K0 End": f"{max([r[3] for r in rectangles]):.4f}",
             "MS1 Ramps": 1,
-            "MS/MS Ramps": int(np.ceil(p['num_windows'] / 3)), # Estimating 3 PASEF frames per cycle
+            "MS/MS Ramps": int(np.ceil(p['num_windows'] / 3)),
             "Total Windows": p['num_windows'],
             "Mass Range (m/z)": f"{p['mz_min']:.2f} - {p['mz_max']:.2f}"
         }]
