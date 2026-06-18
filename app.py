@@ -160,24 +160,16 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### Step 2: Method Development Limits")
         p2_disabled = st.session_state.phase > 2
-
-        # --- SAFETY FIX: Clear old state to prevent KeyErrors ---
-        if p2_disabled and 'num_windows' not in st.session_state.p_state:
-            st.session_state.phase = 2
-            st.rerun()
         
-        # UI updated back to target windows
-        c1, c2, c3, c4 = st.columns(4)
-        mz_min = c1.number_input("Min m/z", value=float(min(mz_vals)), disabled=p2_disabled)
-        mz_max = c2.number_input("Max m/z", value=float(max(mz_vals)), disabled=p2_disabled)
-        num_windows = c3.slider("Target Number of Windows (Total)", min_value=10, max_value=100, value=30, step=1, disabled=p2_disabled)
-        base_cycles = c4.slider("Base MS/MS Ramps (Cycles)", min_value=2, max_value=20, value=4, disabled=p2_disabled)
+        c1, c2, c3 = st.columns(3)
+        mz_min = c1.number_input("Min m/z for Method", value=float(min(mz_vals)), disabled=p2_disabled)
+        mz_max = c2.number_input("Max m/z for Method", value=float(max(mz_vals)), disabled=p2_disabled)
+        num_windows = c3.slider("Number of Vertical Bins (Base Method)", min_value=10, max_value=100, value=30, disabled=p2_disabled)
 
         if p2_disabled:
             mz_min = st.session_state.p_state['mz_min']
             mz_max = st.session_state.p_state['mz_max']
             num_windows = st.session_state.p_state['num_windows']
-            base_cycles = st.session_state.p_state['base_cycles']
 
         fig2 = go.Figure()
         fig2.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), name='Precursors', hoverinfo='skip'))
@@ -191,7 +183,7 @@ if uploaded_file is not None:
         c_btn1, c_btn2 = st.columns([2, 4])
         if st.session_state.phase == 2:
             if c_btn1.button("🚀 View Base Method", type="primary"):
-                st.session_state.p_state = {'mz_min': mz_min, 'mz_max': mz_max, 'num_windows': num_windows, 'base_cycles': base_cycles}
+                st.session_state.p_state = {'mz_min': mz_min, 'mz_max': mz_max, 'num_windows': num_windows}
                 st.session_state.phase = 3
                 st.rerun()
         else:
@@ -203,7 +195,7 @@ if uploaded_file is not None:
     # PHASE 3: BASE METHOD (METHOD 1)
     # -------------------------------------------------------------------------
     if st.session_state.phase >= 3:
-        if 'num_windows' not in st.session_state.p_state or 'm_top' not in st.session_state.b_state:
+        if 'mz_min' not in st.session_state.p_state or 'm_top' not in st.session_state.b_state:
             st.session_state.phase = 1
             st.rerun()
 
@@ -212,61 +204,32 @@ if uploaded_file is not None:
         
         b = st.session_state.b_state
         p = st.session_state.p_state
+        mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
+        filtered_mz = np.sort(mz_vals[mask])
         
-        # --- THE RESTORED ADAPTIVE 2D Slicer ---
-        def generate_method_logic(cycles, target_windows, mz_arr, b_params):
-            # 1. DENSITY ADAPTIVE SLICING (X-Axis): Make dense areas narrow, sparse areas wide
-            columns = max(1, target_windows // cycles)
-            quants = np.linspace(0, 1, columns + 1)
+        def generate_method_logic(cycles, mz_arr, b_params):
+            w_count = cycles * 3 
+            quants = np.linspace(0, 1, w_count + 1)
             edges = np.quantile(mz_arr, quants)
             
-            all_boxes = []
-            
-            # 2. CHOP INTO 2D PUZZLE PIECES
+            rects, m_export, bruker_export = [], [], []
             for i in range(len(edges) - 1):
                 x1, x2 = edges[i], edges[i+1]
-                
                 y_tl = b_params['m_top'] * x1 + b_params['c_top']
                 y_tr = b_params['m_top'] * x2 + b_params['c_top']
                 y_bl = b_params['m_bot'] * x1 + b_params['c_bot']
                 y_br = b_params['m_bot'] * x2 + b_params['c_bot']
                 
-                rect_top = max(y_tl, y_tr)
-                rect_bot = min(y_bl, y_br)
+                rect_top, rect_bot = max(y_tl, y_tr), min(y_bl, y_br)
+                rects.append((x1, x2, rect_bot, rect_top))
                 
-                h = (rect_top - rect_bot) / cycles
-                for c in range(cycles):
-                    r_bot = rect_bot + c * h
-                    r_top = rect_bot + (c + 1) * h
-                    all_boxes.append({'x1': x1, 'x2': x2, 'r_bot': r_bot, 'r_top': r_top})
-                    
-            # 3. SORT BY 1/K0 (Lowest to Highest)
-            all_boxes = sorted(all_boxes, key=lambda b: b['r_bot'])
-            
-            # 4. DEAL THE CARDS (Hardware Safety)
-            cycle_last_im = {c: 0.0 for c in range(1, cycles + 1)}
-            rects, bruker_export = [], []
-            
-            for i, box in enumerate(all_boxes):
-                cycle_id = (i % cycles) + 1 
-                
-                r_bot = box['r_bot']
-                r_top = box['r_top']
-                
-                if r_bot <= cycle_last_im[cycle_id]:
-                    r_bot = cycle_last_im[cycle_id] + 0.001
-                    if r_top <= r_bot:
-                        r_top = r_bot + 0.010
-                        
-                cycle_last_im[cycle_id] = r_top
-                rects.append((box['x1'], box['x2'], r_bot, r_top))
-                
+                cycle_id = (i // 3) + 1
                 bruker_export.append({
                     "#MS Type": "PASEF", "Cycle Id": cycle_id,
-                    "Start IM [1/K0]": f"{r_bot:.4f}", "End IM [1/K0]": f"{r_top:.4f}",
-                    "Start Mass [m/z]": f"{box['x1']:.2f}", "End Mass [m/z]": f"{box['x2']:.2f}", "CE [eV]": "-"
+                    "Start IM [1/K0]": f"{rect_bot:.4f}", "End IM [1/K0]": f"{rect_top:.4f}",
+                    "Start Mass [m/z]": f"{x1:.2f}", "End Mass [m/z]": f"{x2:.2f}", "CE [eV]": "-"
                 })
-                
+            
             bruker_df = pd.DataFrame(bruker_export)
             ms1_row = pd.DataFrame([{"#MS Type": "MS1", "Cycle Id": 0, "Start IM [1/K0]": "-", "End IM [1/K0]": "-", "Start Mass [m/z]": "-", "End Mass [m/z]": "-", "CE [eV]": "-"}])
             bruker_df = pd.concat([ms1_row, bruker_df], ignore_index=True)
@@ -276,16 +239,13 @@ if uploaded_file is not None:
                 "1/K0 End": f"{max([r[3] for r in rects]):.4f}",
                 "MS1 Ramps": 1,
                 "MS/MS Ramps": cycles,
-                "Total Windows": len(rects),
+                "Total Windows": w_count,
                 "Mass Range (m/z)": f"{edges[0]:.2f} - {edges[-1]:.2f}"
             }
             return rects, bruker_df, summary
 
-        # Extract only precursors inside our custom bounds for quantile math
-        mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
-        filtered_mz = np.sort(mz_vals[mask])
-
-        base_rects, _, _ = generate_method_logic(p['base_cycles'], p['num_windows'], filtered_mz, b)
+        base_cycles = int(np.ceil(p['num_windows'] / 3))
+        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
 
         fig3 = go.Figure()
         
@@ -298,11 +258,13 @@ if uploaded_file is not None:
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             
+            # --- THE HOVER FIX ---
             hover_text = (f"<b>Bin {i+1}</b><br>"
                           f"Precursors: {prec_count}<br>"
                           f"m/z: {x1:.2f} - {x2:.2f}<br>"
                           f"1/K0: {y1:.3f} - {y2:.3f}")
             
+            # Use scalar text and strict hovertemplate to enforce correct behavior
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
@@ -340,12 +302,9 @@ if uploaded_file is not None:
                 generated_data = []
                 summary_table = []
                 
-                mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
-                filtered_mz = np.sort(mz_vals[mask])
-                
                 for m_idx in range(num_methods):
-                    c_cycles = p['base_cycles'] + m_idx
-                    rects, b_df, summary = generate_method_logic(c_cycles, p['num_windows'], filtered_mz, b)
+                    c_cycles = base_cycles + m_idx
+                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b)
                     
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
@@ -396,11 +355,13 @@ if uploaded_file is not None:
                         bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
                         prec_count = np.sum(bin_mask)
                         
+                        # --- THE HOVER FIX ---
                         hover_text = (f"<b>Bin {i+1}</b><br>"
                                       f"Precursors: {prec_count}<br>"
                                       f"m/z: {x1:.2f} - {x2:.2f}<br>"
                                       f"1/K0: {y1:.3f} - {y2:.3f}")
 
+                        # Use scalar text and strict hovertemplate
                         fig_m.add_trace(go.Scatter(
                             x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                             mode='lines', line=dict(color=bin_color_hex, width=1),
