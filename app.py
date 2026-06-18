@@ -59,7 +59,7 @@ def load_and_process_data(file):
 @st.cache_data
 def calculate_initial_boundaries(mz_vals, im_vals):
     mz_bins = np.linspace(min(mz_vals), max(mz_vals), 20)
-    top_im_points, bot_im_points, valid_mz_points = [], [], []
+    top_im_points, bot_im_points, valid_mz_points = [] , [] , []
 
     for i in range(len(mz_bins)-1):
         mask = (mz_vals >= mz_bins[i]) & (mz_vals <= mz_bins[i+1])
@@ -214,52 +214,97 @@ if uploaded_file is not None:
         
         b = st.session_state.b_state
         p = st.session_state.p_state
-        mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
-        filtered_mz = np.sort(mz_vals[mask])
         
-        def generate_method_logic(cycles, mz_arr, b_params, overlap):
-            w_count = cycles * 3 
-            quants = np.linspace(0, 1, w_count + 1)
-            edges = np.quantile(mz_arr, quants)
-            
-            rects, m_export, bruker_export = [], [], []
-            for i in range(len(edges) - 1):
-                # Apply logical overlap for isolation efficiency
-                raw_x1, raw_x2 = edges[i], edges[i+1]
-                x1 = max(mz_arr.min(), raw_x1 - overlap) if i > 0 else raw_x1
-                x2 = min(mz_arr.max(), raw_x2 + overlap) if i < (len(edges) - 2) else raw_x2
+        # Filter both mz and im based on user constraints to keep them strictly parallel
+        mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
+        filtered_mz = mz_vals[mask]
+        filtered_im = im_vals[mask]
+        
+        def generate_method_logic(cycles, mz_arr, im_arr, overlap):
+            """
+            Core logic to generate a diaPASEF window scheme based on precursor m/z and ion mobility.
+            """
+            windows_per_cycle = 3
+            total_windows = cycles * windows_per_cycle
 
-                y_tl = b_params['m_top'] * x1 + b_params['c_top']
-                y_tr = b_params['m_top'] * x2 + b_params['c_top']
-                y_bl = b_params['m_bot'] * x1 + b_params['c_bot']
-                y_br = b_params['m_bot'] * x2 + b_params['c_bot']
-                
-                rect_top, rect_bot = max(y_tl, y_tr), min(y_bl, y_br)
-                rects.append((x1, x2, rect_bot, rect_top))
-                
-                cycle_id = (i // 3) + 1
-                bruker_export.append({
-                    "#MS Type": "PASEF", "Cycle Id": cycle_id,
-                    "Start IM [1/K0]": f"{rect_bot:.4f}", "End IM [1/K0]": f"{rect_top:.4f}",
-                    "Start Mass [m/z]": f"{x1:.2f}", "End Mass [m/z]": f"{x2:.2f}", "CE [eV]": "-"
-                })
+            # 1. Density-adaptive m/z boundaries using quantiles
+            mz_quantiles = np.linspace(0, 1, total_windows + 1)
+            mz_edges = np.quantile(mz_arr, mz_quantiles)
+            mz_edges[0] -= overlap
+            mz_edges[-1] += overlap
+
+            # 2. Group chunks by cycle to enforce Strict Chaining
+            cycle_chunks = {i: [] for i in range(cycles)}
+            for i in range(total_windows):
+                cycle_idx = i % cycles
+                cycle_chunks[cycle_idx].append((mz_edges[i], mz_edges[i+1]))
+
+            method_export = []
+            rects = []
+
+            # 3. Build the exact IM chains per cycle
+            for cycle_idx in range(cycles):
+                chunks = cycle_chunks[cycle_idx] # Always 'windows_per_cycle' chunks, sorted low to high m/z
+
+                # Find all precursors falling inside these chunks
+                cycle_mask = np.zeros(len(mz_arr), dtype=bool)
+                for mz_start, mz_end in chunks:
+                    cycle_mask |= (mz_arr >= mz_start) & (mz_arr <= mz_end)
+
+                if np.sum(cycle_mask) > 0:
+                    im_min = np.min(im_arr[cycle_mask]) - 0.02
+                    im_max = np.max(im_arr[cycle_mask]) + 0.02
+                else:
+                    im_min, im_max = 0.6, 1.5
+
+                # Calculate strict cut points for the windows
+                step = (im_max - im_min) / windows_per_cycle
+                im_boundaries = [(im_min + i * step, im_min + (i + 1) * step) for i in range(windows_per_cycle)]
+
+                # 4. Assign properties and compile
+                for win_idx in range(windows_per_cycle):
+                    mz_start, mz_end = chunks[win_idx]
+                    im_start, im_end = im_boundaries[win_idx]
+                    
+                    rects.append((mz_start, mz_end, im_start, im_end))
+
+                    method_export.append({
+                        '#MS Type': 'PASEF',  # Formatted for Bruker Parser
+                        'Cycle Id': cycle_idx + 1,
+                        'Start IM [1/K0]': round(im_start, 4),
+                        'End IM [1/K0]': round(im_end, 4),
+                        'Start Mass [m/z]': round(mz_start, 2),
+                        'End Mass [m/z]': round(mz_end, 2),
+                        'CE [eV]': '-'
+                    })
+
+            # 5. Compile to DataFrame and inject MS1 row
+            method_df = pd.DataFrame(method_export)
+            ms1_row = pd.DataFrame([{
+                '#MS Type': 'MS1', 
+                'Cycle Id': 0, 
+                'Start IM [1/K0]': '-', 
+                'End IM [1/K0]': '-', 
+                'Start Mass [m/z]': '-', 
+                'End Mass [m/z]': '-', 
+                'CE [eV]': '-'
+            }])
             
-            bruker_df = pd.DataFrame(bruker_export)
-            ms1_row = pd.DataFrame([{"#MS Type": "MS1", "Cycle Id": 0, "Start IM [1/K0]": "-", "End IM [1/K0]": "-", "Start Mass [m/z]": "-", "End Mass [m/z]": "-", "CE [eV]": "-"}])
-            bruker_df = pd.concat([ms1_row, bruker_df], ignore_index=True)
-            
+            method_df = pd.concat([ms1_row, method_df.sort_values(by=['Cycle Id', 'Start Mass [m/z]'])], ignore_index=True)
+
             summary = {
-                "1/K0 Start": f"{min([r[2] for r in rects]):.4f}",
-                "1/K0 End": f"{max([r[3] for r in rects]):.4f}",
+                "1/K0 Start": f"{min([r[2] for r in rects]):.4f}" if rects else "-",
+                "1/K0 End": f"{max([r[3] for r in rects]):.4f}" if rects else "-",
                 "MS1 Ramps": 1,
                 "MS/MS Ramps": cycles,
-                "Total Windows": w_count,
-                "Mass Range (m/z)": f"{edges[0]:.2f} - {edges[-1]:.2f}"
+                "Total Windows": total_windows,
+                "Mass Range (m/z)": f"{mz_edges[0]:.2f} - {mz_edges[-1]:.2f}"
             }
-            return rects, bruker_df, summary
+            
+            return rects, method_df, summary
 
         base_cycles = int(np.ceil(p['num_windows'] / 3))
-        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b, mz_overlap)
+        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, filtered_im, mz_overlap)
 
         fig3 = go.Figure()
         
@@ -316,7 +361,7 @@ if uploaded_file is not None:
                 
                 for m_idx in range(num_methods):
                     c_cycles = base_cycles + m_idx
-                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b, mz_overlap)
+                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, filtered_im, mz_overlap)
                     
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
