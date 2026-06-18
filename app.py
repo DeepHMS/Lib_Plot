@@ -160,8 +160,12 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### Step 2: Method Development Limits")
         p2_disabled = st.session_state.phase > 2
+
+        # --- SAFETY FIX: Clear stale variable names from memory ---
+        if p2_disabled and 'window_width' not in st.session_state.p_state:
+            st.session_state.phase = 2
+            st.rerun()
         
-        # --- THE FIX: Updated UI for true Banana Parameters ---
         c1, c2, c3, c4 = st.columns(4)
         mz_min = c1.number_input("Min m/z", value=float(min(mz_vals)), disabled=p2_disabled)
         mz_max = c2.number_input("Max m/z", value=float(max(mz_vals)), disabled=p2_disabled)
@@ -198,7 +202,8 @@ if uploaded_file is not None:
     # PHASE 3: BASE METHOD (METHOD 1)
     # -------------------------------------------------------------------------
     if st.session_state.phase >= 3:
-        if 'mz_min' not in st.session_state.p_state or 'm_top' not in st.session_state.b_state:
+        # --- SAFETY FIX: Clear stale variable names from memory ---
+        if 'window_width' not in st.session_state.p_state or 'm_top' not in st.session_state.b_state:
             st.session_state.phase = 1
             st.rerun()
 
@@ -208,9 +213,7 @@ if uploaded_file is not None:
         b = st.session_state.b_state
         p = st.session_state.p_state
         
-        # --- THE FIX: True "Banana" Curve-Hugging Math ---
         def generate_method_logic(cycles, w_width, min_z, max_z, b_params):
-            # Create rigid 1D slices of exactly w_width (e.g. 25 Da)
             mz_edges = np.arange(min_z, max_z, w_width)
             if len(mz_edges) == 0 or mz_edges[-1] < max_z:
                 mz_edges = np.append(mz_edges, max_z)
@@ -221,7 +224,6 @@ if uploaded_file is not None:
             for i in range(len(mz_edges) - 1):
                 x1, x2 = mz_edges[i], mz_edges[i+1]
                 
-                # Curve-Hugging: Calculate the EXACT polygon bounds for this specific 25 Da slice
                 y_tl = b_params['m_top'] * x1 + b_params['c_top']
                 y_tr = b_params['m_top'] * x2 + b_params['c_top']
                 y_bl = b_params['m_bot'] * x1 + b_params['c_bot']
@@ -230,14 +232,10 @@ if uploaded_file is not None:
                 rect_top = max(y_tl, y_tr)
                 rect_bot = min(y_bl, y_br)
                 
-                # Deal the cards: Cycle 1, 2, 3...
                 cycle_id = (i % cycles) + 1
                 
-                # Hardware Safety Enforcer
                 if rect_bot <= cycle_last_im[cycle_id]:
-                    # Nudge it up just enough to prevent Quadrupole crash
                     rect_bot = cycle_last_im[cycle_id] + 0.001 
-                    # If nudging it up collapsed the box, shrink the top slightly to keep it valid
                     if rect_top <= rect_bot:
                         rect_top = rect_bot + 0.010 
                         
@@ -264,7 +262,6 @@ if uploaded_file is not None:
             }
             return rects, bruker_df, summary
 
-        # Generate the Base Method (Method 1)
         base_rects, _, _ = generate_method_logic(p['base_cycles'], p['window_width'], p['mz_min'], p['mz_max'], b)
 
         fig3 = go.Figure()
@@ -322,7 +319,6 @@ if uploaded_file is not None:
                 summary_table = []
                 
                 for m_idx in range(num_methods):
-                    # Iteration: We increase the number of cycles to naturally reduce Quadrupole pressure
                     c_cycles = p['base_cycles'] + m_idx
                     rects, b_df, summary = generate_method_logic(c_cycles, p['window_width'], p['mz_min'], p['mz_max'], b)
                     
