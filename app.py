@@ -257,14 +257,19 @@ if uploaded_file is not None:
         
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
-            htext = f"<b>Bin {i+1}</b><br>Precursors: {prec_count}<br>m/z: {x1:.2f} - {x2:.2f}<br>1/K0: {y1:.3f} - {y2:.3f}"
             
-            # THE FIX: explicit name and hovertemplate, removed hoverinfo='text'
+            # --- THE HOVER FIX ---
+            hover_text = (f"<b>Bin {i+1}</b><br>"
+                          f"Precursors: {prec_count}<br>"
+                          f"m/z: {x1:.2f} - {x2:.2f}<br>"
+                          f"1/K0: {y1:.3f} - {y2:.3f}")
+            
+            # Use scalar text and strict hovertemplate to enforce correct behavior
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
                 fill='toself', fillcolor=bin_fill_rgba, 
-                text=[htext]*5, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
+                text=hover_text, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
             ))
         
         fig3.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
@@ -350,17 +355,18 @@ if uploaded_file is not None:
                         bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
                         prec_count = np.sum(bin_mask)
                         
+                        # --- THE HOVER FIX ---
                         hover_text = (f"<b>Bin {i+1}</b><br>"
                                       f"Precursors: {prec_count}<br>"
                                       f"m/z: {x1:.2f} - {x2:.2f}<br>"
                                       f"1/K0: {y1:.3f} - {y2:.3f}")
 
-                        # THE FIX: explicit name and hovertemplate, removed hoverinfo='text'
+                        # Use scalar text and strict hovertemplate
                         fig_m.add_trace(go.Scatter(
                             x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                             mode='lines', line=dict(color=bin_color_hex, width=1),
                             fill='toself', fillcolor=bin_fill_rgba,
-                            text=[hover_text]*5, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
+                            text=hover_text, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Bin {i+1}", showlegend=False
                         ))
                     
                     fig_m.update_layout(title=f"{m_data['name']} ({m_data['cycles']} Cycles)", xaxis_title="m/z", yaxis_title="1/K0", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
