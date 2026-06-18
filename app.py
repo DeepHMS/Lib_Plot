@@ -88,9 +88,8 @@ if uploaded_file is not None:
     y_axis_min = c_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
     y_axis_max = c_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
 
-    # --- NEW: Bin Appearance Controls ---
     st.sidebar.subheader("Bin Appearance (Steps 3 & 4)")
-    bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB") # Medium Purple Default
+    bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB")
     bin_opacity = st.sidebar.slider("Bin Fill Opacity", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
     bin_fill_rgba = hex_to_rgba(bin_color_hex, bin_opacity)
 
@@ -173,7 +172,7 @@ if uploaded_file is not None:
             num_windows = st.session_state.p_state['num_windows']
 
         fig2 = go.Figure()
-        fig2.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), name='Precursors', hoverinfo='skip'))
+        fig2.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.4, size=marker_size), name='Precursors', hoverinfo='skip'))
         fig2.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_top_start, view_top_end], mode='lines', line=dict(color='red', width=2), name='Locked Upper Bound', hoverinfo='skip'))
         fig2.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_bot_start, view_bot_end], mode='lines', line=dict(color='red', width=2), name='Locked Lower Bound', hoverinfo='skip'))
         fig2.add_vline(x=mz_min, line_dash="dash", line_color="black")
@@ -250,8 +249,7 @@ if uploaded_file is not None:
 
         fig3 = go.Figure()
         
-        # RESTORED DENSITY COLOR FOR STEP 3 (opacity lowered slightly so bins pop)
-        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), hoverinfo='skip', showlegend=False))
+        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), hoverinfo='skip', showlegend=False))
         
         poly_y_top1, poly_y_top2 = b['m_top'] * p['mz_min'] + b['c_top'], b['m_top'] * p['mz_max'] + b['c_top']
         poly_y_bot1, poly_y_bot2 = b['m_bot'] * p['mz_min'] + b['c_bot'], b['m_bot'] * p['mz_max'] + b['c_bot']
@@ -261,7 +259,6 @@ if uploaded_file is not None:
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             htext = f"<b>Bin {i+1}</b><br>Precursors: {prec_count}<br>m/z: {x1:.2f} - {x2:.2f}<br>1/K0: {y1:.3f} - {y2:.3f}"
             
-            # FIXED HOVER: name="" and hovertemplate guarantees no "trace X"
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
@@ -293,21 +290,11 @@ if uploaded_file is not None:
         num_methods = c1.slider("How many methods to develop?", min_value=1, max_value=25, value=10, step=1)
         c2.warning("⚠️ High number of methods involves intensive computation. The plots below are optimized to prevent browser crashes.")
 
+        # Logic to compute method math ONLY (Plots drawn dynamically later)
         if st.button("⚡ Generate Adaptive Methods", type="primary"):
-            with st.spinner("Generating methods and plots..."):
+            with st.spinner("Calculating methods..."):
                 generated_data = []
                 summary_table = []
-                
-                # Sub-sample data to prevent WebGL crashing, but keep the density color mapping correct
-                if len(mz_vals) > 2500:
-                    sample_idx = np.random.choice(len(mz_vals), 2500, replace=False)
-                    mini_mz = mz_vals[sample_idx]
-                    mini_im = im_vals[sample_idx]
-                    mini_density = density[sample_idx] # Sub-sampled Density for coloring
-                else:
-                    mini_mz = mz_vals
-                    mini_im = im_vals
-                    mini_density = density
                 
                 for m_idx in range(num_methods):
                     c_cycles = base_cycles + m_idx
@@ -315,36 +302,13 @@ if uploaded_file is not None:
                     
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
-
-                    fig_m = go.Figure()
-                    
-                    # RESTORED DENSITY COLOR FOR STEP 4
-                    fig_m.add_trace(go.Scatter(x=mini_mz, y=mini_im, mode='markers', marker=dict(color=mini_density, colorscale='Jet', opacity=0.3, size=2), hoverinfo='skip', showlegend=False))
-                    
-                    for i, (x1, x2, y1, y2) in enumerate(rects):
-                        bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
-                        prec_count = np.sum(bin_mask)
-                        
-                        hover_text = (f"<b>Bin {i+1}</b><br>"
-                                      f"Precursors: {prec_count}<br>"
-                                      f"m/z: {x1:.2f} - {x2:.2f}<br>"
-                                      f"1/K0: {y1:.3f} - {y2:.3f}")
-
-                        # FIXED HOVER for Phase 4 as well
-                        fig_m.add_trace(go.Scatter(
-                            x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
-                            mode='lines', line=dict(color=bin_color_hex, width=1),
-                            fill='toself', fillcolor=bin_fill_rgba,
-                            text=[hover_text]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', name="", showlegend=False
-                        ))
-                    
-                    fig_m.update_layout(title=f"Method {m_idx + 1} ({c_cycles} Cycles)", xaxis_title="m/z", yaxis_title="1/K0", showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
                     
                     generated_data.append({
                         "id": m_idx + 1,
                         "name": f"Method_{m_idx + 1}",
                         "df": b_df,
-                        "fig": fig_m
+                        "rects": rects,
+                        "cycles": c_cycles
                     })
                 
                 st.session_state.generated_methods = generated_data
@@ -353,14 +317,58 @@ if uploaded_file is not None:
         if st.session_state.generated_methods:
             st.success("✅ Iterative Generation Complete!")
             
+            # --- PREPARE DATA FOR DYNAMIC MINI-PLOTS ---
+            # Use fixed seed sub-sampling to prevent flickering on UI updates
+            if len(mz_vals) > 2500:
+                np.random.seed(42) 
+                sample_idx = np.random.choice(len(mz_vals), 2500, replace=False)
+                mini_mz = mz_vals[sample_idx]
+                mini_im = im_vals[sample_idx]
+                mini_density = density[sample_idx]
+            else:
+                mini_mz = mz_vals
+                mini_im = im_vals
+                mini_density = density
+
             cols = st.columns(4)
             selected_methods = []
             
             for idx, m_data in enumerate(st.session_state.generated_methods):
                 with cols[idx % 4]:
-                    st.plotly_chart(m_data['fig'], use_container_width=True)
+                    # Build Figure Dynamically so sidebar appearance controls apply instantly!
+                    fig_m = go.Figure()
+                    
+                    # Add Density Cloud
+                    fig_m.add_trace(go.Scatter(
+                        x=mini_mz, y=mini_im, mode='markers', 
+                        marker=dict(color=mini_density, colorscale='Jet', opacity=0.5, size=marker_size), 
+                        hoverinfo='skip', showlegend=False
+                    ))
+                    
+                    # Add Interactive Bins
+                    for i, (x1, x2, y1, y2) in enumerate(m_data['rects']):
+                        bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
+                        prec_count = np.sum(bin_mask)
+                        
+                        hover_text = (f"<b>Bin {i+1}</b><br>"
+                                      f"Precursors: {prec_count}<br>"
+                                      f"m/z: {x1:.2f} - {x2:.2f}<br>"
+                                      f"1/K0: {y1:.3f} - {y2:.3f}")
+
+                        fig_m.add_trace(go.Scatter(
+                            x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
+                            mode='lines', line=dict(color=bin_color_hex, width=1),
+                            fill='toself', fillcolor=bin_fill_rgba,
+                            text=[hover_text]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', name="", showlegend=False
+                        ))
+                    
+                    fig_m.update_layout(title=f"{m_data['name']} ({m_data['cycles']} Cycles)", xaxis_title="m/z", yaxis_title="1/K0", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
+                    
+                    st.plotly_chart(fig_m, use_container_width=True)
                     if st.checkbox(f"Select {m_data['name']}", value=True, key=f"chk_{idx}"):
-                        selected_methods.append(m_data)
+                        m_data_copy = m_data.copy()
+                        m_data_copy['fig'] = fig_m # Store temporary fig just for the ZIP compiler below
+                        selected_methods.append(m_data_copy)
 
             st.markdown("#### Methods Summary Table")
             st.dataframe(st.session_state.summary_df, use_container_width=True, hide_index=True)
