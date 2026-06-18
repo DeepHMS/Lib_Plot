@@ -164,7 +164,7 @@ if uploaded_file is not None:
         c1, c2, c3 = st.columns(3)
         mz_min = c1.number_input("Min m/z for Method", value=float(min(mz_vals)), disabled=p2_disabled)
         mz_max = c2.number_input("Max m/z for Method", value=float(max(mz_vals)), disabled=p2_disabled)
-        num_windows = c3.slider("Number of Vertical Bins (Base Method)", min_value=10, max_value=100, value=30, disabled=p2_disabled)
+        num_windows = c3.slider("Target Number of Windows (Total)", min_value=10, max_value=100, value=30, disabled=p2_disabled)
 
         if p2_disabled:
             mz_min = st.session_state.p_state['mz_min']
@@ -207,45 +207,65 @@ if uploaded_file is not None:
         mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
         filtered_mz = np.sort(mz_vals[mask])
         
-        # --- THE FIX: Round-Robin Multiplexing & Hardware Safety Enforcer ---
-        def generate_method_logic(cycles, mz_arr, b_params):
-            w_count = cycles * 3 
-            quants = np.linspace(0, 1, w_count + 1)
+        # --- THE NEW 2D TILING MATH (The Puzzle Piece Strategy) ---
+        def generate_method_logic(cycles, target_windows, mz_arr, b_params):
+            # 1. Calculate how many columns we need so (columns * cycles) roughly equals the target_windows
+            columns = max(1, target_windows // cycles)
+            
+            # Slice the m/z axis horizontally based on density into 'columns'
+            quants = np.linspace(0, 1, columns + 1)
             edges = np.quantile(mz_arr, quants)
             
-            rects, m_export, bruker_export = [], [], []
+            all_boxes = []
             
-            # Tracker to guarantee Quadrupole never overlaps within the same cycle
-            cycle_last_im = {c: 0.0 for c in range(1, cycles + 1)} 
-            
+            # 2. Chop into perfect 2D Puzzle Pieces
             for i in range(len(edges) - 1):
                 x1, x2 = edges[i], edges[i+1]
+                
+                # Find the red polygon limits at this specific column
                 y_tl = b_params['m_top'] * x1 + b_params['c_top']
                 y_tr = b_params['m_top'] * x2 + b_params['c_top']
                 y_bl = b_params['m_bot'] * x1 + b_params['c_bot']
                 y_br = b_params['m_bot'] * x2 + b_params['c_bot']
                 
-                rect_top, rect_bot = max(y_tl, y_tr), min(y_bl, y_br)
+                rect_top = max(y_tl, y_tr)
+                rect_bot = min(y_bl, y_br)
                 
-                # Assign to cycles like dealing a deck of cards (1, 2, 3, 1, 2, 3...)
-                cycle_id = (i % cycles) + 1
+                # Split this column perfectly vertically into 'cycles' chunks
+                h = (rect_top - rect_bot) / cycles
+                for c in range(cycles):
+                    r_bot = rect_bot + c * h
+                    r_top = rect_bot + (c + 1) * h
+                    all_boxes.append({'x1': x1, 'x2': x2, 'r_bot': r_bot, 'r_top': r_top})
+                    
+            # 3. Sort boxes from bottom-left to top-right (lowest 1/K0 first)
+            all_boxes = sorted(all_boxes, key=lambda b: b['r_bot'])
+            
+            # 4. "The Card Dealer" - Distribute to cycles to form perfect staircases
+            cycle_last_im = {c: 0.0 for c in range(1, cycles + 1)}
+            rects, bruker_export = [], []
+            
+            for i, box in enumerate(all_boxes):
+                cycle_id = (i % cycles) + 1 # Round-robin dealing: 1, 2, 3, 1, 2, 3...
                 
-                # Safety Gate: Force staircase strictness
-                if rect_bot <= cycle_last_im[cycle_id]:
-                    rect_bot = cycle_last_im[cycle_id] + 0.001
-                    if rect_top <= rect_bot:
-                        rect_top = rect_bot + 0.010
+                r_bot = box['r_bot']
+                r_top = box['r_top']
                 
-                cycle_last_im[cycle_id] = rect_top # Remember this for the next box in this cycle
-                
-                rects.append((x1, x2, rect_bot, rect_top))
+                # Hardware Safety Enforcer: Nudge if needed, though rarely triggered due to 2D sorting
+                if r_bot <= cycle_last_im[cycle_id]:
+                    r_bot = cycle_last_im[cycle_id] + 0.001
+                    if r_top <= r_bot:
+                        r_top = r_bot + 0.010
+                        
+                cycle_last_im[cycle_id] = r_top
+                rects.append((box['x1'], box['x2'], r_bot, r_top))
                 
                 bruker_export.append({
                     "#MS Type": "PASEF", "Cycle Id": cycle_id,
-                    "Start IM [1/K0]": f"{rect_bot:.4f}", "End IM [1/K0]": f"{rect_top:.4f}",
-                    "Start Mass [m/z]": f"{x1:.2f}", "End Mass [m/z]": f"{x2:.2f}", "CE [eV]": "-"
+                    "Start IM [1/K0]": f"{r_bot:.4f}", "End IM [1/K0]": f"{r_top:.4f}",
+                    "Start Mass [m/z]": f"{box['x1']:.2f}", "End Mass [m/z]": f"{box['x2']:.2f}", "CE [eV]": "-"
                 })
-            
+                
             bruker_df = pd.DataFrame(bruker_export)
             ms1_row = pd.DataFrame([{"#MS Type": "MS1", "Cycle Id": 0, "Start IM [1/K0]": "-", "End IM [1/K0]": "-", "Start Mass [m/z]": "-", "End Mass [m/z]": "-", "CE [eV]": "-"}])
             bruker_df = pd.concat([ms1_row, bruker_df], ignore_index=True)
@@ -255,13 +275,13 @@ if uploaded_file is not None:
                 "1/K0 End": f"{max([r[3] for r in rects]):.4f}",
                 "MS1 Ramps": 1,
                 "MS/MS Ramps": cycles,
-                "Total Windows": w_count,
+                "Total Windows": len(rects),
                 "Mass Range (m/z)": f"{edges[0]:.2f} - {edges[-1]:.2f}"
             }
             return rects, bruker_df, summary
 
         base_cycles = int(np.ceil(p['num_windows'] / 3))
-        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
+        base_rects, _, _ = generate_method_logic(base_cycles, p['num_windows'], filtered_mz, b)
 
         fig3 = go.Figure()
         
@@ -318,7 +338,8 @@ if uploaded_file is not None:
                 
                 for m_idx in range(num_methods):
                     c_cycles = base_cycles + m_idx
-                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b)
+                    # Call the new 2D logic. It adapts columns to match the target windows perfectly
+                    rects, b_df, summary = generate_method_logic(c_cycles, p['num_windows'], filtered_mz, b)
                     
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
