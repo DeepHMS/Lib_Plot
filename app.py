@@ -251,15 +251,28 @@ if uploaded_file is not None:
                 for mz_start, mz_end in chunks:
                     cycle_mask |= (mz_arr >= mz_start) & (mz_arr <= mz_end)
 
-                if np.sum(cycle_mask) > 0:
+                # --- NEW: Adaptive density for IM axis using quantiles ---
+                if np.sum(cycle_mask) >= windows_per_cycle:
+                    im_chunk_arr = im_arr[cycle_mask]
+                    im_quantiles = np.linspace(0, 1, windows_per_cycle + 1)
+                    im_edges = np.quantile(im_chunk_arr, im_quantiles)
+                    
+                    # Add small padding to the extremes to capture edge precursors
+                    im_edges[0] -= 0.02
+                    im_edges[-1] += 0.02
+                    
+                    im_boundaries = [(im_edges[i], im_edges[i+1]) for i in range(windows_per_cycle)]
+                elif np.sum(cycle_mask) > 0:
+                    # Fallback to linear if very few precursors
                     im_min = np.min(im_arr[cycle_mask]) - 0.02
                     im_max = np.max(im_arr[cycle_mask]) + 0.02
+                    step = (im_max - im_min) / windows_per_cycle
+                    im_boundaries = [(im_min + i * step, im_min + (i + 1) * step) for i in range(windows_per_cycle)]
                 else:
+                    # Fallback if entirely empty
                     im_min, im_max = 0.6, 1.5
-
-                # Calculate strict cut points for the windows
-                step = (im_max - im_min) / windows_per_cycle
-                im_boundaries = [(im_min + i * step, im_min + (i + 1) * step) for i in range(windows_per_cycle)]
+                    step = (im_max - im_min) / windows_per_cycle
+                    im_boundaries = [(im_min + i * step, im_min + (i + 1) * step) for i in range(windows_per_cycle)]
 
                 # 4. Assign properties and compile
                 for win_idx in range(windows_per_cycle):
