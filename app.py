@@ -213,16 +213,13 @@ if uploaded_file is not None:
                 rect_top, rect_bot = max(y_tl, y_tr), min(y_bl, y_br)
                 rects.append((x1, x2, rect_bot, rect_top))
                 
-                # Assign Cycle ID (1 to N)
                 cycle_id = (i // 3) + 1
-                
                 bruker_export.append({
                     "#MS Type": "PASEF", "Cycle Id": cycle_id,
                     "Start IM [1/K0]": f"{rect_bot:.4f}", "End IM [1/K0]": f"{rect_top:.4f}",
                     "Start Mass [m/z]": f"{x1:.2f}", "End Mass [m/z]": f"{x2:.2f}", "CE [eV]": "-"
                 })
             
-            # Prepend MS1 row
             bruker_df = pd.DataFrame(bruker_export)
             ms1_row = pd.DataFrame([{"#MS Type": "MS1", "Cycle Id": 0, "Start IM [1/K0]": "-", "End IM [1/K0]": "-", "Start Mass [m/z]": "-", "End Mass [m/z]": "-", "CE [eV]": "-"}])
             bruker_df = pd.concat([ms1_row, bruker_df], ignore_index=True)
@@ -237,7 +234,6 @@ if uploaded_file is not None:
             }
             return rects, bruker_df, summary
 
-        # Display Base Method
         base_cycles = int(np.ceil(p['num_windows'] / 3))
         base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
 
@@ -246,10 +242,12 @@ if uploaded_file is not None:
         poly_y_top1, poly_y_top2 = b['m_top'] * p['mz_min'] + b['c_top'], b['m_top'] * p['mz_max'] + b['c_top']
         poly_y_bot1, poly_y_bot2 = b['m_bot'] * p['mz_min'] + b['c_bot'], b['m_bot'] * p['mz_max'] + b['c_bot']
         fig3.add_trace(go.Scatter(x=[p['mz_min'], p['mz_max'], p['mz_max'], p['mz_min'], p['mz_min']], y=[poly_y_top1, poly_y_top2, poly_y_bot2, poly_y_bot1, poly_y_top1], mode='lines', line=dict(color='red', width=3), hoverinfo='skip', showlegend=False))
+        
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             htext = f"<b>Bin {i+1}</b><br>Precursors: {prec_count}<br>m/z: {x1:.2f} - {x2:.2f}<br>1/K0: {y1:.3f} - {y2:.3f}"
-            fig3.add_trace(go.Scatter(x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], mode='lines', line=dict(color='purple', width=1), fill='toself', fillcolor='rgba(177, 156, 217, 0.4)', text=htext, hovertemplate="%{text}<extra></extra>", hoveron='fills', showlegend=False))
+            fig3.add_trace(go.Scatter(x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], mode='lines', line=dict(color='purple', width=1), fill='toself', fillcolor='rgba(177, 156, 217, 0.4)', text=[htext]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', showlegend=False))
+        
         fig3.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
         st.plotly_chart(fig3, use_container_width=True)
 
@@ -272,27 +270,51 @@ if uploaded_file is not None:
         
         c1, c2 = st.columns([1, 3])
         num_methods = c1.slider("How many methods to develop?", min_value=1, max_value=25, value=10, step=1)
-        c2.warning("⚠️ High number of methods involves intensive computation and plot rendering. This may take 10-30 seconds.")
+        c2.warning("⚠️ High number of methods involves intensive computation. The plots below are optimized to prevent browser crashes.")
 
         if st.button("⚡ Generate Adaptive Methods", type="primary"):
             with st.spinner("Generating methods and plots..."):
                 generated_data = []
                 summary_table = []
                 
+                # FIX 1: Down-sample the scatter data just for the mini-plots to prevent WebGL context crashes
+                if len(mz_vals) > 2500:
+                    sample_idx = np.random.choice(len(mz_vals), 2500, replace=False)
+                    mini_mz = mz_vals[sample_idx]
+                    mini_im = im_vals[sample_idx]
+                else:
+                    mini_mz = mz_vals
+                    mini_im = im_vals
+                
                 for m_idx in range(num_methods):
-                    # Density adaptation: Increase cycles by 1 for each subsequent method
                     c_cycles = base_cycles + m_idx
                     rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b)
                     
-                    # Store Summary
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
 
-                    # Build mini Plotly figure
                     fig_m = go.Figure()
-                    fig_m.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color='gray', opacity=0.1, size=2), hoverinfo='skip'))
-                    for (x1, x2, y1, y2) in rects:
-                        fig_m.add_trace(go.Scatter(x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], mode='lines', line=dict(color='purple', width=1), fill='toself', fillcolor='rgba(177, 156, 217, 0.4)', hoverinfo='skip'))
+                    
+                    # FIX 2: Use standard go.Scatter instead of Scattergl for the mini plots
+                    fig_m.add_trace(go.Scatter(x=mini_mz, y=mini_im, mode='markers', marker=dict(color='gray', opacity=0.1, size=2), hoverinfo='skip'))
+                    
+                    # FIX 3: Inject the hover text logic directly into the mini plots
+                    for i, (x1, x2, y1, y2) in enumerate(rects):
+                        bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
+                        prec_count = np.sum(bin_mask)
+                        
+                        hover_text = (f"<b>Bin {i+1}</b><br>"
+                                      f"Precursors: {prec_count}<br>"
+                                      f"m/z: {x1:.2f} - {x2:.2f}<br>"
+                                      f"1/K0: {y1:.3f} - {y2:.3f}")
+
+                        fig_m.add_trace(go.Scatter(
+                            x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
+                            mode='lines', line=dict(color='purple', width=1),
+                            fill='toself', fillcolor='rgba(177, 156, 217, 0.4)',
+                            text=[hover_text]*5, hoverinfo='text', hovertemplate="%{text}<extra></extra>", hoveron='fills', showlegend=False
+                        ))
+                    
                     fig_m.update_layout(title=f"Method {m_idx + 1} ({c_cycles} Cycles)", xaxis_title="m/z", yaxis_title="1/K0", showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
                     
                     generated_data.append({
@@ -305,49 +327,40 @@ if uploaded_file is not None:
                 st.session_state.generated_methods = generated_data
                 st.session_state.summary_df = pd.DataFrame(summary_table)[["Method", "1/K0 Start", "1/K0 End", "MS1 Ramps", "MS/MS Ramps", "Total Windows", "Mass Range (m/z)"]]
 
-        # Display Iterated Results
         if st.session_state.generated_methods:
             st.success("✅ Iterative Generation Complete!")
             
-            # Display 4 plots per row
             cols = st.columns(4)
             selected_methods = []
             
             for idx, m_data in enumerate(st.session_state.generated_methods):
                 with cols[idx % 4]:
                     st.plotly_chart(m_data['fig'], use_container_width=True)
-                    # Checkbox to select for download
                     if st.checkbox(f"Select {m_data['name']}", value=True, key=f"chk_{idx}"):
                         selected_methods.append(m_data)
 
             st.markdown("#### Methods Summary Table")
             st.dataframe(st.session_state.summary_df, use_container_width=True, hide_index=True)
 
-            # --- EXPORTS ---
             st.divider()
             st.markdown("### Export Section")
             c_d1, c_d2 = st.columns(2)
             
-            # CSV Table Download
             csv_table = st.session_state.summary_df.to_csv(index=False)
             c_d1.download_button("📊 Download Summary Table (.csv)", data=csv_table, file_name="Methods_Summary.csv", mime="text/csv", use_container_width=True)
 
-            # ZIP Download of Selected TXT and PNG
             if c_d2.button("🗜️ Prepare ZIP of Selected Methods", use_container_width=True):
                 with st.spinner("Compiling ZIP file... (Images require 'kaleido')"):
                     zip_buffer = io.BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for m in selected_methods:
-                            # Write Bruker TXT
                             csv_str = m['df'].to_csv(index=False)
                             zf.writestr(f"{m['name']}.txt", csv_str)
-                            
-                            # Write PNG (Requires Kaleido in requirements)
                             try:
                                 img_bytes = m['fig'].to_image(format="png", width=800, height=600)
                                 zf.writestr(f"{m['name']}_Plot.png", img_bytes)
                             except Exception as e:
-                                pass # Silently skip image if kaleido fails to prevent hard crash
+                                pass
                     
                     st.download_button("📥 Click Here to Download Final ZIP", data=zip_buffer.getvalue(), file_name="Iterated_Methods.zip", mime="application/zip")
 
