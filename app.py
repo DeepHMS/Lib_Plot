@@ -172,7 +172,7 @@ if uploaded_file is not None:
             num_windows = st.session_state.p_state['num_windows']
 
         fig2 = go.Figure()
-        fig2.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.4, size=marker_size), name='Precursors', hoverinfo='skip'))
+        fig2.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), name='Precursors', hoverinfo='skip'))
         fig2.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_top_start, view_top_end], mode='lines', line=dict(color='red', width=2), name='Locked Upper Bound', hoverinfo='skip'))
         fig2.add_trace(go.Scatter(x=[x_axis_min, x_axis_max], y=[view_bot_start, view_bot_end], mode='lines', line=dict(color='red', width=2), name='Locked Lower Bound', hoverinfo='skip'))
         fig2.add_vline(x=mz_min, line_dash="dash", line_color="black")
@@ -248,9 +248,7 @@ if uploaded_file is not None:
         base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
 
         fig3 = go.Figure()
-        
-        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), hoverinfo='skip', showlegend=False))
-        
+        fig3.add_trace(go.Scattergl(x=mz_vals, y=im_vals, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), hoverinfo='skip', showlegend=False))
         poly_y_top1, poly_y_top2 = b['m_top'] * p['mz_min'] + b['c_top'], b['m_top'] * p['mz_max'] + b['c_top']
         poly_y_bot1, poly_y_bot2 = b['m_bot'] * p['mz_min'] + b['c_bot'], b['m_bot'] * p['mz_max'] + b['c_bot']
         fig3.add_trace(go.Scatter(x=[p['mz_min'], p['mz_max'], p['mz_max'], p['mz_min'], p['mz_min']], y=[poly_y_top1, poly_y_top2, poly_y_bot2, poly_y_bot1, poly_y_top1], mode='lines', line=dict(color='red', width=3), hoverinfo='skip', showlegend=False))
@@ -258,7 +256,6 @@ if uploaded_file is not None:
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             htext = f"<b>Bin {i+1}</b><br>Precursors: {prec_count}<br>m/z: {x1:.2f} - {x2:.2f}<br>1/K0: {y1:.3f} - {y2:.3f}"
-            
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
@@ -272,6 +269,8 @@ if uploaded_file is not None:
         if st.session_state.phase == 3:
             if st.button("Proceed to Multi-Method Generation", type="primary"):
                 st.session_state.phase = 4
+                # EXPLICITLY CLEAR MEMORY HERE to prevent KeyErrors on legacy state
+                st.session_state.generated_methods = [] 
                 st.rerun()
         else:
             if st.button("🔓 Unlock & Edit Step 3"):
@@ -290,7 +289,6 @@ if uploaded_file is not None:
         num_methods = c1.slider("How many methods to develop?", min_value=1, max_value=25, value=10, step=1)
         c2.warning("⚠️ High number of methods involves intensive computation. The plots below are optimized to prevent browser crashes.")
 
-        # Logic to compute method math ONLY (Plots drawn dynamically later)
         if st.button("⚡ Generate Adaptive Methods", type="primary"):
             with st.spinner("Calculating methods..."):
                 generated_data = []
@@ -317,8 +315,6 @@ if uploaded_file is not None:
         if st.session_state.generated_methods:
             st.success("✅ Iterative Generation Complete!")
             
-            # --- PREPARE DATA FOR DYNAMIC MINI-PLOTS ---
-            # Use fixed seed sub-sampling to prevent flickering on UI updates
             if len(mz_vals) > 2500:
                 np.random.seed(42) 
                 sample_idx = np.random.choice(len(mz_vals), 2500, replace=False)
@@ -334,18 +330,20 @@ if uploaded_file is not None:
             selected_methods = []
             
             for idx, m_data in enumerate(st.session_state.generated_methods):
+                # SAFETY CHECK to prevent KeyErrors if loading old state
+                if 'rects' not in m_data:
+                    st.error("Stale data detected. Please click 'Generate Adaptive Methods' above to refresh.")
+                    break
+
                 with cols[idx % 4]:
-                    # Build Figure Dynamically so sidebar appearance controls apply instantly!
                     fig_m = go.Figure()
                     
-                    # Add Density Cloud
                     fig_m.add_trace(go.Scatter(
                         x=mini_mz, y=mini_im, mode='markers', 
                         marker=dict(color=mini_density, colorscale='Jet', opacity=0.5, size=marker_size), 
                         hoverinfo='skip', showlegend=False
                     ))
                     
-                    # Add Interactive Bins
                     for i, (x1, x2, y1, y2) in enumerate(m_data['rects']):
                         bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
                         prec_count = np.sum(bin_mask)
@@ -367,7 +365,7 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_m, use_container_width=True)
                     if st.checkbox(f"Select {m_data['name']}", value=True, key=f"chk_{idx}"):
                         m_data_copy = m_data.copy()
-                        m_data_copy['fig'] = fig_m # Store temporary fig just for the ZIP compiler below
+                        m_data_copy['fig'] = fig_m 
                         selected_methods.append(m_data_copy)
 
             st.markdown("#### Methods Summary Table")
