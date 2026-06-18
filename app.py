@@ -101,7 +101,7 @@ if uploaded_file is not None:
 
     p1_disabled = st.session_state.phase > 1
 
-    # SAFETY NET 1: If Streamlit lost memory, force reset to phase 1
+    # SAFETY NET 1
     if p1_disabled and 'm_top' not in st.session_state.b_state:
         st.session_state.phase = 1
         st.rerun()
@@ -251,6 +251,7 @@ if uploaded_file is not None:
             mode='lines', line=dict(color='red', width=3), name='User Polygon', hoverinfo='skip'
         ))
 
+        # --- FIX: PROPER HOVERTEXT FOR SHAPES ---
         for i, (x1, x2, y1, y2) in enumerate(rectangles):
             bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
             prec_count = np.sum(bin_mask)
@@ -258,13 +259,18 @@ if uploaded_file is not None:
             hover_text = (f"<b>Bin {i+1}</b><br>"
                           f"Precursors: {prec_count}<br>"
                           f"m/z: {x1:.2f} - {x2:.2f}<br>"
-                          f"1/K0: {y1:.3f} - {y2:.3f}<extra></extra>")
+                          f"1/K0: {y1:.3f} - {y2:.3f}")
 
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
-                mode='lines', line=dict(color='purple', width=1),
-                fill='toself', fillcolor='rgba(177, 156, 217, 0.4)',
-                text=[hover_text]*5, hoverinfo='text', showlegend=False
+                mode='lines', 
+                line=dict(color='purple', width=1),
+                fill='toself', 
+                fillcolor='rgba(177, 156, 217, 0.4)',
+                text=hover_text, 
+                hovertemplate="%{text}<extra></extra>", # `<extra></extra>` removes the "trace X" box
+                hoveron='fills', # Forces the hover to trigger anywhere inside the polygon
+                showlegend=False
             ))
 
         fig3.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=600, margin=dict(t=10, b=10))
