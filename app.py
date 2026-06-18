@@ -207,12 +207,17 @@ if uploaded_file is not None:
         mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
         filtered_mz = np.sort(mz_vals[mask])
         
+        # --- THE FIX: Round-Robin Multiplexing & Hardware Safety Enforcer ---
         def generate_method_logic(cycles, mz_arr, b_params):
             w_count = cycles * 3 
             quants = np.linspace(0, 1, w_count + 1)
             edges = np.quantile(mz_arr, quants)
             
             rects, m_export, bruker_export = [], [], []
+            
+            # Tracker to guarantee Quadrupole never overlaps within the same cycle
+            cycle_last_im = {c: 0.0 for c in range(1, cycles + 1)} 
+            
             for i in range(len(edges) - 1):
                 x1, x2 = edges[i], edges[i+1]
                 y_tl = b_params['m_top'] * x1 + b_params['c_top']
@@ -221,9 +226,20 @@ if uploaded_file is not None:
                 y_br = b_params['m_bot'] * x2 + b_params['c_bot']
                 
                 rect_top, rect_bot = max(y_tl, y_tr), min(y_bl, y_br)
+                
+                # Assign to cycles like dealing a deck of cards (1, 2, 3, 1, 2, 3...)
+                cycle_id = (i % cycles) + 1
+                
+                # Safety Gate: Force staircase strictness
+                if rect_bot <= cycle_last_im[cycle_id]:
+                    rect_bot = cycle_last_im[cycle_id] + 0.001
+                    if rect_top <= rect_bot:
+                        rect_top = rect_bot + 0.010
+                
+                cycle_last_im[cycle_id] = rect_top # Remember this for the next box in this cycle
+                
                 rects.append((x1, x2, rect_bot, rect_top))
                 
-                cycle_id = (i // 3) + 1
                 bruker_export.append({
                     "#MS Type": "PASEF", "Cycle Id": cycle_id,
                     "Start IM [1/K0]": f"{rect_bot:.4f}", "End IM [1/K0]": f"{rect_top:.4f}",
@@ -258,13 +274,11 @@ if uploaded_file is not None:
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             
-            # --- THE HOVER FIX ---
             hover_text = (f"<b>Bin {i+1}</b><br>"
                           f"Precursors: {prec_count}<br>"
                           f"m/z: {x1:.2f} - {x2:.2f}<br>"
                           f"1/K0: {y1:.3f} - {y2:.3f}")
             
-            # Use scalar text and strict hovertemplate to enforce correct behavior
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
@@ -355,13 +369,11 @@ if uploaded_file is not None:
                         bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
                         prec_count = np.sum(bin_mask)
                         
-                        # --- THE HOVER FIX ---
                         hover_text = (f"<b>Bin {i+1}</b><br>"
                                       f"Precursors: {prec_count}<br>"
                                       f"m/z: {x1:.2f} - {x2:.2f}<br>"
                                       f"1/K0: {y1:.3f} - {y2:.3f}")
 
-                        # Use scalar text and strict hovertemplate
                         fig_m.add_trace(go.Scatter(
                             x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                             mode='lines', line=dict(color=bin_color_hex, width=1),
