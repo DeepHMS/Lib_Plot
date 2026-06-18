@@ -36,17 +36,24 @@ def hex_to_rgba(hex_color, opacity):
 @st.cache_data
 def load_and_process_data(file):
     df = pd.read_csv(file, sep="\t")
-    precursors = df[['PrecursorMz', 'PrecursorIonMobility']].drop_duplicates().dropna()
-    mz_vals = precursors['PrecursorMz'].values
-    im_vals = precursors['PrecursorIonMobility'].values
+    
+    # Fallback for different search engine export formats
+    mz_col = 'PrecursorMz' if 'PrecursorMz' in df.columns else 'Precursor.Mz'
+    im_col = 'PrecursorIonMobility' if 'PrecursorIonMobility' in df.columns else 'IonMobility'
+    
+    precursors = df[[mz_col, im_col]].drop_duplicates().dropna()
+    mz_vals = precursors[mz_col].values
+    im_vals = precursors[im_col].values
+
+    # Performance Fix: Downsample for plotting and KDE if dataset is massive
+    if len(mz_vals) > 10000:
+        idx = np.random.choice(len(mz_vals), 10000, replace=False)
+        mz_vals = mz_vals[idx]
+        im_vals = im_vals[idx]
 
     xy = np.vstack([mz_vals, im_vals])
-    if len(mz_vals) > 5000:
-        idx = np.random.choice(len(mz_vals), 5000, replace=False)
-        xy_sample = np.vstack([mz_vals[idx], im_vals[idx]])
-        density = gaussian_kde(xy_sample)(xy)
-    else:
-        density = gaussian_kde(xy)(xy)
+    density = gaussian_kde(xy)(xy)
+    
     return mz_vals, im_vals, density
 
 @st.cache_data
@@ -92,6 +99,9 @@ if uploaded_file is not None:
     bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB")
     bin_opacity = st.sidebar.slider("Bin Fill Opacity", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
     bin_fill_rgba = hex_to_rgba(bin_color_hex, bin_opacity)
+
+    st.sidebar.subheader("Method Parameters")
+    mz_overlap = st.sidebar.number_input("Window Overlap (m/z)", min_value=0.0, max_value=5.0, value=1.0, step=0.5, help="Added to boundaries to account for quadrupole isolation efficiency.")
 
     # -------------------------------------------------------------------------
     # PHASE 1: BOUNDARY SELECTION
@@ -207,14 +217,18 @@ if uploaded_file is not None:
         mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
         filtered_mz = np.sort(mz_vals[mask])
         
-        def generate_method_logic(cycles, mz_arr, b_params):
+        def generate_method_logic(cycles, mz_arr, b_params, overlap):
             w_count = cycles * 3 
             quants = np.linspace(0, 1, w_count + 1)
             edges = np.quantile(mz_arr, quants)
             
             rects, m_export, bruker_export = [], [], []
             for i in range(len(edges) - 1):
-                x1, x2 = edges[i], edges[i+1]
+                # Apply logical overlap for isolation efficiency
+                raw_x1, raw_x2 = edges[i], edges[i+1]
+                x1 = max(mz_arr.min(), raw_x1 - overlap) if i > 0 else raw_x1
+                x2 = min(mz_arr.max(), raw_x2 + overlap) if i < (len(edges) - 2) else raw_x2
+
                 y_tl = b_params['m_top'] * x1 + b_params['c_top']
                 y_tr = b_params['m_top'] * x2 + b_params['c_top']
                 y_bl = b_params['m_bot'] * x1 + b_params['c_bot']
@@ -245,7 +259,7 @@ if uploaded_file is not None:
             return rects, bruker_df, summary
 
         base_cycles = int(np.ceil(p['num_windows'] / 3))
-        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b)
+        base_rects, _, _ = generate_method_logic(base_cycles, filtered_mz, b, mz_overlap)
 
         fig3 = go.Figure()
         
@@ -258,13 +272,11 @@ if uploaded_file is not None:
         for i, (x1, x2, y1, y2) in enumerate(base_rects):
             prec_count = np.sum((mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2))
             
-            # --- THE HOVER FIX ---
             hover_text = (f"<b>Bin {i+1}</b><br>"
                           f"Precursors: {prec_count}<br>"
                           f"m/z: {x1:.2f} - {x2:.2f}<br>"
                           f"1/K0: {y1:.3f} - {y2:.3f}")
             
-            # Use scalar text and strict hovertemplate to enforce correct behavior
             fig3.add_trace(go.Scatter(
                 x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1], 
                 mode='lines', line=dict(color=bin_color_hex, width=1), 
@@ -304,7 +316,7 @@ if uploaded_file is not None:
                 
                 for m_idx in range(num_methods):
                     c_cycles = base_cycles + m_idx
-                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b)
+                    rects, b_df, summary = generate_method_logic(c_cycles, filtered_mz, b, mz_overlap)
                     
                     summary["Method"] = f"Method {m_idx + 1}"
                     summary_table.append(summary)
@@ -323,6 +335,7 @@ if uploaded_file is not None:
         if st.session_state.generated_methods:
             st.success("✅ Iterative Generation Complete!")
             
+            # Optimized sub-plot downsampling
             if len(mz_vals) > 2500:
                 np.random.seed(42) 
                 sample_idx = np.random.choice(len(mz_vals), 2500, replace=False)
@@ -355,13 +368,11 @@ if uploaded_file is not None:
                         bin_mask = (mz_vals >= x1) & (mz_vals <= x2) & (im_vals >= y1) & (im_vals <= y2)
                         prec_count = np.sum(bin_mask)
                         
-                        # --- THE HOVER FIX ---
                         hover_text = (f"<b>Bin {i+1}</b><br>"
                                       f"Precursors: {prec_count}<br>"
                                       f"m/z: {x1:.2f} - {x2:.2f}<br>"
                                       f"1/K0: {y1:.3f} - {y2:.3f}")
 
-                        # Use scalar text and strict hovertemplate
                         fig_m.add_trace(go.Scatter(
                             x=[x1, x2, x2, x1, x1], y=[y1, y1, y2, y2, y1],
                             mode='lines', line=dict(color=bin_color_hex, width=1),
@@ -388,17 +399,24 @@ if uploaded_file is not None:
             c_d1.download_button("📊 Download Summary Table (.csv)", data=csv_table, file_name="Methods_Summary.csv", mime="text/csv", use_container_width=True)
 
             if c_d2.button("🗜️ Prepare ZIP of Selected Methods", use_container_width=True):
-                with st.spinner("Compiling ZIP file... (Images require 'kaleido')"):
+                with st.spinner("Compiling ZIP file..."):
                     zip_buffer = io.BytesIO()
+                    image_export_failed = False
+                    
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for m in selected_methods:
                             csv_str = m['df'].to_csv(index=False)
                             zf.writestr(f"{m['name']}.txt", csv_str)
+                            
+                            # Kaleido Safety Net
                             try:
                                 img_bytes = m['fig'].to_image(format="png", width=800, height=600)
                                 zf.writestr(f"{m['name']}_Plot.png", img_bytes)
-                            except Exception as e:
-                                pass
+                            except Exception:
+                                image_export_failed = True
+                    
+                    if image_export_failed:
+                        st.warning("⚠️ Text files exported successfully, but image export failed. Please ensure the `kaleido` package is installed in your environment to generate PNG plots.")
                     
                     st.download_button("📥 Click Here to Download Final ZIP", data=zip_buffer.getvalue(), file_name="Iterated_Methods.zip", mime="application/zip")
 
