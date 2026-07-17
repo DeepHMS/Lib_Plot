@@ -85,15 +85,15 @@ if uploaded_file is not None:
         mz_vals, im_vals, plot_mz, plot_im, density = load_and_process_data(uploaded_file)
 
     st.sidebar.header("2. Plot Appearance & Axis Limits")
-    marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=4, step=1)
+    marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=8, step=1)
     
     st.sidebar.subheader("Axis Limits")
     c_x1, c_x2 = st.sidebar.columns(2)
-    x_axis_min = c_x1.number_input("X Min (m/z)", value=float(min(mz_vals) - 50))
-    x_axis_max = c_x2.number_input("X Max (m/z)", value=float(max(mz_vals) + 50))
+    x_axis_min = c_x1.number_input("X Min (m/z)", value=100.0)
+    x_axis_max = c_x2.number_input("X Max (m/z)", value=1800.0)
     c_y1, c_y2 = st.sidebar.columns(2)
-    y_axis_min = c_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
-    y_axis_max = c_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
+    y_axis_min = c_y1.number_input("Y Min (1/K0)", value=0.200, format="%.3f")
+    y_axis_max = c_y2.number_input("Y Max (1/K0)", value=2.000, format="%.3f")
 
     st.sidebar.subheader("Bin Appearance")
     bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB")
@@ -110,11 +110,11 @@ if uploaded_file is not None:
     c1, c2, c3 = st.columns(3)
     im_min = c1.number_input("1/K0 Min (pos.1)", value=0.60, step=0.05, format="%.2f", disabled=p1_disabled)
     im_max = c2.number_input("1/K0 Max (pos.2)", value=1.50, step=0.05, format="%.2f", disabled=p1_disabled)
-    slope_offset = c3.slider(f"Angle / Slope (Δ m/z to {im_max:.2f} 1/K0)", min_value=100, max_value=1500, value=1215, step=5, disabled=p1_disabled)
+    slope_offset = c3.slider(f"Angle / Slope (Δ m/z to {im_max:.2f} 1/K0)", min_value=100, max_value=1500, value=1100, step=5, disabled=p1_disabled)
 
     c4, c5 = st.columns(2)
-    mz_min = c4.number_input("m/z Min (Left edge at pos.1)", value=400.0, step=10.0, disabled=p1_disabled)
-    mz_max = c5.number_input("m/z Max (Right edge at pos.1)", value=900.0, step=10.0, disabled=p1_disabled)
+    mz_min = c4.number_input("m/z Min (Left edge at pos.1)", value=100.0, step=10.0, disabled=p1_disabled)
+    mz_max = c5.number_input("m/z Max (Right edge at pos.1)", value=500.0, step=10.0, disabled=p1_disabled)
 
     # Calculate Box Corners
     box_x = [mz_min, mz_max, mz_max + slope_offset, mz_min + slope_offset, mz_min]
