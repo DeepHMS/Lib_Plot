@@ -184,17 +184,19 @@ if uploaded_file is not None:
         b = st.session_state.b_state
         p = st.session_state.p_state
         
-        # Exact mask: Filter precursors falling inside the "Whole Box" Parallelogram
-        im_ratio = (im_vals - b['im_min']) / (b['im_max'] - b['im_min'])
-        expected_shift = im_ratio * b['slope']
+        # 1. Global Precursor Math: Calculate spatial shift for all library points
+        im_ratio_global = (im_vals - b['im_min']) / (b['im_max'] - b['im_min'])
+        expected_shift_global = im_ratio_global * b['slope']
         
+        # 2. Extract strictly those inside the "Whole Box" parallelogram
         corridor_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
-                        (mz_vals >= (b['mz_min'] + expected_shift)) & \
-                        (mz_vals <= (b['mz_max'] + expected_shift))
+                        (mz_vals >= (b['mz_min'] + expected_shift_global)) & \
+                        (mz_vals <= (b['mz_max'] + expected_shift_global))
                         
         filtered_mz = mz_vals[corridor_mask]
-        # Project all filtered masses down to the pos.1 line to density map them properly
-        projected_mz_at_pos1 = filtered_mz - expected_shift[corridor_mask]
+        
+        # 3. Straighten the Parallelogram: Project all filtered masses onto the bottom line
+        projected_mz_at_pos1 = filtered_mz - expected_shift_global[corridor_mask]
 
         def generate_diagonal_logic(mz_arr_projected, scans, m_type, m_min, m_max, b_state, iteration=0):
             windows = []
@@ -222,6 +224,7 @@ if uploaded_file is not None:
                     st.warning("No precursors found within the Box Limits!")
                     return [], pd.DataFrame(), {}
 
+                # Density Slicing Logic
                 precursors_per_scan = total_precursors / scans
                 shift = (iteration * 0.05 * precursors_per_scan)
                 
@@ -260,10 +263,10 @@ if uploaded_file is not None:
             x_pts = [m1_start, m1_end, m2_end, m2_start, m1_start]
             y_pts = [b['im_min'], b['im_min'], b['im_max'], b['im_max'], b['im_min']]
             
-            # Precise precursor count for this slice
+            # Use global array to accurately count actual library precursors inside this polygon slice
             bin_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
-                       (mz_vals >= (m1_start + expected_shift)) & \
-                       (mz_vals <= (m1_end + expected_shift))
+                       (mz_vals >= (m1_start + expected_shift_global)) & \
+                       (mz_vals <= (m1_end + expected_shift_global))
             prec_count = np.sum(bin_mask)
             
             hover_text = (f"<b>Scan {i+1}</b><br>"
@@ -338,6 +341,10 @@ if uploaded_file is not None:
             if p['method_type'] == "Variable (Density-Based)":
                 st.success("✅ Iterative Generation Complete!")
                 
+                # Pre-calculate global shift for accurate hover text below
+                im_ratio_global = (im_vals - b['im_min']) / (b['im_max'] - b['im_min'])
+                expected_shift_global = im_ratio_global * b['slope']
+                
                 cols = st.columns(4)
                 selected_methods = []
                 
@@ -354,11 +361,21 @@ if uploaded_file is not None:
                             x_pts = [m1_start, m1_end, m2_end, m2_start, m1_start]
                             y_pts = [b['im_min'], b['im_min'], b['im_max'], b['im_max'], b['im_min']]
                             
+                            bin_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
+                                       (mz_vals >= (m1_start + expected_shift_global)) & \
+                                       (mz_vals <= (m1_end + expected_shift_global))
+                            prec_count = np.sum(bin_mask)
+                            
+                            hover_text = (f"<b>Scan {i+1}</b><br>"
+                                          f"Precursors: {prec_count}<br>"
+                                          f"m/z pos.1: {m1_start:.2f} - {m1_end:.2f}<br>"
+                                          f"Width: {(m1_end - m1_start):.2f} Th")
+                            
                             fig_m.add_trace(go.Scatter(
                                 x=x_pts, y=y_pts,
                                 mode='lines', line=dict(color=bin_color_hex, width=1),
                                 fill='toself', fillcolor=bin_fill_rgba,
-                                hoverinfo='skip', showlegend=False
+                                text=hover_text, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Scan {i+1}", showlegend=False
                             ))
                         
                         fig_m.update_layout(title=m_data['name'], xaxis_title="m/z", yaxis_title="1/K0", xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), showlegend=False, height=350, margin=dict(l=10, r=10, t=30, b=10))
