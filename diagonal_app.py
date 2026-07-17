@@ -409,13 +409,14 @@ if uploaded_file is not None:
                             zf.writestr(f"{m['name']}.txt", bruker_str)
                             
                             try:
-                                img_bytes = m['fig'].to_image(format="png", width=800, height=600)
-                                zf.writestr(f"{m['name']}_Plot.png", img_bytes)
+                                # Export as an interactive offline HTML file instead of a static PNG
+                                html_bytes = m['fig'].to_html(include_plotlyjs='cdn').encode('utf-8')
+                                zf.writestr(f"{m['name']}_Plot.html", html_bytes)
                             except Exception:
                                 image_export_failed = True
                     
                     if image_export_failed:
-                        st.warning("⚠️ Text files exported successfully, but image export failed. Please ensure the `kaleido` package is installed in your environment to generate PNG plots.")
+                        st.warning("⚠️ Text files exported successfully, but HTML plot export failed.")
                     
                     st.download_button("📥 Click Here to Download Final ZIP", data=zip_buffer.getvalue(), file_name="Iterated_Diagonal_Methods.zip", mime="application/zip")
 
