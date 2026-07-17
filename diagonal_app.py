@@ -95,91 +95,87 @@ if uploaded_file is not None:
     y_axis_min = c_y1.number_input("Y Min (1/K0)", value=float(min(im_vals) - 0.05), format="%.3f")
     y_axis_max = c_y2.number_input("Y Max (1/K0)", value=float(max(im_vals) + 0.05), format="%.3f")
 
-    st.sidebar.subheader("Bin Appearance (Steps 3 & 4)")
+    st.sidebar.subheader("Bin Appearance")
     bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB")
     bin_opacity = st.sidebar.slider("Bin Fill Opacity", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
     bin_fill_rgba = hex_to_rgba(bin_color_hex, bin_opacity)
 
     # -------------------------------------------------------------------------
-    # PHASE 1: DIAGONAL BOUNDARY SELECTION
+    # PHASE 1: MERGED DIAGONAL & METHOD BOUNDARY SELECTION
     # -------------------------------------------------------------------------
-    st.markdown("### Step 1: Set Diagonal Boundaries")
+    st.markdown("### Step 1: Set Diagonal Boundaries (The Whole Box)")
     p1_disabled = st.session_state.phase > 1
     
-    c1, c2 = st.columns(2)
+    # Merged Parameters
+    c1, c2, c3 = st.columns(3)
     im_min = c1.number_input("1/K0 Min (pos.1)", value=0.60, step=0.05, format="%.2f", disabled=p1_disabled)
     im_max = c2.number_input("1/K0 Max (pos.2)", value=1.50, step=0.05, format="%.2f", disabled=p1_disabled)
+    slope_offset = c3.slider(f"Angle / Slope (Δ m/z to {im_max:.2f} 1/K0)", min_value=100, max_value=1500, value=1215, step=5, disabled=p1_disabled)
 
-    c3, c4, c5 = st.columns(3)
-    top_line_mz = c3.number_input("Left Boundary (m/z at pos.1)", value=400.0, step=10.0, disabled=p1_disabled)
-    bottom_line_mz = c4.number_input("Right Boundary (m/z at pos.1)", value=900.0, step=10.0, disabled=p1_disabled)
-    slope_offset = c5.slider(f"Angle / Slope (Δ m/z to {im_max:.2f} 1/K0)", min_value=100, max_value=1500, value=1215, step=5, disabled=p1_disabled)
+    c4, c5 = st.columns(2)
+    mz_min = c4.number_input("m/z Min (Left edge at pos.1)", value=400.0, step=10.0, disabled=p1_disabled)
+    mz_max = c5.number_input("m/z Max (Right edge at pos.1)", value=900.0, step=10.0, disabled=p1_disabled)
+
+    # Calculate Box Corners
+    box_x = [mz_min, mz_max, mz_max + slope_offset, mz_min + slope_offset, mz_min]
+    box_y = [im_min, im_min, im_max, im_max, im_min]
 
     fig1 = go.Figure()
     fig1.add_trace(go.Scattergl(x=plot_mz, y=plot_im, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.6, size=marker_size), name='Precursors', hovertemplate='<b>m/z:</b> %{x:.2f}<br><b>1/K0:</b> %{y:.4f}<extra></extra>'))
     
-    # Draw the dynamic diagonal corridor
-    fig1.add_trace(go.Scatter(x=[top_line_mz, top_line_mz + slope_offset], y=[im_min, im_max], mode='lines', line=dict(color='red', width=3), name='Left Boundary', hoverinfo='skip'))
-    fig1.add_trace(go.Scatter(x=[bottom_line_mz, bottom_line_mz + slope_offset], y=[im_min, im_max], mode='lines', line=dict(color='red', width=3), name='Right Boundary', hoverinfo='skip'))
+    # Draw the merged "Whole Box" Parallelogram
+    fig1.add_trace(go.Scatter(
+        x=box_x, y=box_y, 
+        mode='lines', line=dict(color='red', width=3), 
+        fill='toself', fillcolor='rgba(255, 0, 0, 0.1)',
+        name='Boundary Box', hoverinfo='skip'
+    ))
     
     fig1.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
     st.plotly_chart(fig1, use_container_width=True)
 
     c_btn1, c_btn2 = st.columns([1, 4])
     if st.session_state.phase == 1:
-        if c_btn1.button("✅ Done (Lock Boundaries)", type="primary"):
-            st.session_state.b_state = {'im_min': im_min, 'im_max': im_max, 'top_line_mz': top_line_mz, 'bot_line_mz': bottom_line_mz, 'slope': slope_offset}
+        if c_btn1.button("✅ Lock Boundaries & Proceed", type="primary"):
+            st.session_state.b_state = {'im_min': im_min, 'im_max': im_max, 'mz_min': mz_min, 'mz_max': mz_max, 'slope': slope_offset}
             st.session_state.phase = 2
             st.rerun()
     else:
-        if c_btn1.button("🔓 Unlock & Edit Step 1"):
+        if c_btn1.button("🔓 Unlock & Edit Boundaries"):
             st.session_state.phase = 1
             st.rerun()
 
     # -------------------------------------------------------------------------
-    # PHASE 2: METHOD LIMITS
+    # PHASE 2: OPTIMIZATION STRATEGY
     # -------------------------------------------------------------------------
     if st.session_state.phase >= 2:
         st.markdown("---")
-        st.markdown("### Step 2: Method Development Limits")
+        st.markdown("### Step 2: Optimization Strategy")
         p2_disabled = st.session_state.phase > 2
         
-        c1, c2, c3, c4 = st.columns(4)
-        mz_min = c1.number_input("Min m/z for Method", value=float(min(mz_vals)), disabled=p2_disabled)
-        mz_max = c2.number_input("Max m/z for Method", value=float(max(mz_vals)), disabled=p2_disabled)
-        num_windows = c3.slider("Number of MS/MS Scans", min_value=1, max_value=20, value=8, step=1, disabled=p2_disabled)
-        method_type = c4.radio("Optimization Strategy", ["Fixed", "Variable (Density-Based)"], disabled=p2_disabled)
+        c1, c2 = st.columns(2)
+        num_windows = c1.slider("Number of MS/MS Scans", min_value=1, max_value=20, value=8, step=1, disabled=p2_disabled)
+        method_type = c2.radio("Optimization Strategy", ["Fixed", "Variable (Density-Based)"], disabled=p2_disabled)
 
         if p2_disabled:
-            mz_min = st.session_state.p_state['mz_min']
-            mz_max = st.session_state.p_state['mz_max']
             num_windows = st.session_state.p_state['num_windows']
             method_type = st.session_state.p_state['method_type']
 
         b = st.session_state.b_state
 
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scattergl(x=plot_mz, y=plot_im, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.3, size=marker_size), name='Precursors', hoverinfo='skip'))
-        fig2.add_trace(go.Scatter(x=[b['top_line_mz'], b['top_line_mz'] + b['slope']], y=[b['im_min'], b['im_max']], mode='lines', line=dict(color='red', width=2), name='Locked Left Bound', hoverinfo='skip'))
-        fig2.add_trace(go.Scatter(x=[b['bot_line_mz'], b['bot_line_mz'] + b['slope']], y=[b['im_min'], b['im_max']], mode='lines', line=dict(color='red', width=2), name='Locked Right Bound', hoverinfo='skip'))
-        fig2.add_vline(x=mz_min, line_dash="dash", line_color="black")
-        fig2.add_vline(x=mz_max, line_dash="dash", line_color="black")
-        fig2.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
-        st.plotly_chart(fig2, use_container_width=True)
-
         c_btn1, c_btn2 = st.columns([2, 4])
         if st.session_state.phase == 2:
             if c_btn1.button("🚀 View Base Method", type="primary"):
-                st.session_state.p_state = {'mz_min': mz_min, 'mz_max': mz_max, 'num_windows': num_windows, 'method_type': method_type}
+                st.session_state.p_state = {'num_windows': num_windows, 'method_type': method_type}
                 st.session_state.phase = 3
                 st.rerun()
         else:
-            if c_btn1.button("🔓 Unlock & Edit Step 2"):
+            if c_btn1.button("🔓 Unlock & Edit Strategy"):
                 st.session_state.phase = 2
                 st.rerun()
 
     # -------------------------------------------------------------------------
-    # PHASE 3: BASE METHOD
+    # PHASE 3: BASE METHOD GENERATION
     # -------------------------------------------------------------------------
     if st.session_state.phase >= 3:
         st.markdown("---")
@@ -188,16 +184,19 @@ if uploaded_file is not None:
         b = st.session_state.b_state
         p = st.session_state.p_state
         
-        # Isolate precursors strictly within the requested vertical limits and diagonal corridor
-        limit_mask = (mz_vals >= p['mz_min']) & (mz_vals <= p['mz_max'])
+        # Exact mask: Filter precursors falling inside the "Whole Box" Parallelogram
         im_ratio = (im_vals - b['im_min']) / (b['im_max'] - b['im_min'])
-        expected_left_mz = b['top_line_mz'] + (im_ratio * b['slope'])
-        expected_right_mz = b['bot_line_mz'] + (im_ratio * b['slope'])
+        expected_shift = im_ratio * b['slope']
         
-        corridor_mask = (mz_vals >= expected_left_mz) & (mz_vals <= expected_right_mz)
-        filtered_mz = mz_vals[limit_mask & corridor_mask]
+        corridor_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
+                        (mz_vals >= (b['mz_min'] + expected_shift)) & \
+                        (mz_vals <= (b['mz_max'] + expected_shift))
+                        
+        filtered_mz = mz_vals[corridor_mask]
+        # Project all filtered masses down to the pos.1 line to density map them properly
+        projected_mz_at_pos1 = filtered_mz - expected_shift[corridor_mask]
 
-        def generate_diagonal_logic(mz_arr, scans, m_type, m_min, m_max, b_state, iteration=0):
+        def generate_diagonal_logic(mz_arr_projected, scans, m_type, m_min, m_max, b_state, iteration=0):
             windows = []
             widths = []
             rects = []
@@ -216,11 +215,11 @@ if uploaded_file is not None:
                     rects.append((start, end, pos2_start, pos2_start + step_size))
 
             else:
-                sorted_mz = np.sort(mz_arr)
+                sorted_mz = np.sort(mz_arr_projected)
                 total_precursors = len(sorted_mz)
                 
                 if total_precursors == 0:
-                    st.warning("No precursors found within the limits!")
+                    st.warning("No precursors found within the Box Limits!")
                     return [], pd.DataFrame(), {}
 
                 precursors_per_scan = total_precursors / scans
@@ -252,21 +251,19 @@ if uploaded_file is not None:
             }
             return rects, method_df, summary
 
-        base_rects, base_df, base_summary = generate_diagonal_logic(filtered_mz, p['num_windows'], p['method_type'], p['mz_min'], p['mz_max'], b)
+        base_rects, base_df, base_summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['mz_min'], b['mz_max'], b)
 
         fig3 = go.Figure()
         fig3.add_trace(go.Scattergl(x=plot_mz, y=plot_im, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), hoverinfo='skip', showlegend=False))
         
         for i, (m1_start, m1_end, m2_start, m2_end) in enumerate(base_rects):
-            # Polygon corners for Plotly fill
             x_pts = [m1_start, m1_end, m2_end, m2_start, m1_start]
             y_pts = [b['im_min'], b['im_min'], b['im_max'], b['im_max'], b['im_min']]
             
-            # Count precise precursors in this diagonal bin
-            im_ratio_bin = (im_vals - b['im_min']) / (b['im_max'] - b['im_min'])
-            ex_left = m1_start + (im_ratio_bin * b['slope'])
-            ex_right = m1_end + (im_ratio_bin * b['slope'])
-            bin_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & (mz_vals >= ex_left) & (mz_vals <= ex_right)
+            # Precise precursor count for this slice
+            bin_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
+                       (mz_vals >= (m1_start + expected_shift)) & \
+                       (mz_vals <= (m1_end + expected_shift))
             prec_count = np.sum(bin_mask)
             
             hover_text = (f"<b>Scan {i+1}</b><br>"
@@ -288,7 +285,7 @@ if uploaded_file is not None:
 
         if p['method_type'] == "Fixed":
             st.success("Fixed Method Generated! Proceed to export below.")
-            st.session_state.phase = 4  # Auto jump to export for Fixed
+            st.session_state.phase = 4
             st.session_state.generated_methods = [{"id": 1, "name": "Fixed_Method", "df": base_df, "rects": base_rects, "summary": base_summary}]
             st.session_state.summary_df = pd.DataFrame([base_summary])
         else:
@@ -321,7 +318,7 @@ if uploaded_file is not None:
                     summary_table = []
                     
                     for m_idx in range(num_methods):
-                        rects, b_df, summary = generate_diagonal_logic(filtered_mz, p['num_windows'], p['method_type'], p['mz_min'], p['mz_max'], b, iteration=m_idx)
+                        rects, b_df, summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['mz_min'], b['mz_max'], b, iteration=m_idx)
                         
                         summary["Method"] = f"Variable_Method_{m_idx + 1}"
                         summary_table.append(summary)
@@ -334,7 +331,6 @@ if uploaded_file is not None:
                         })
                     
                     st.session_state.generated_methods = generated_data
-                    # Reorder columns
                     cols = ["Method"] + [c for c in summary_table[0] if c != "Method"]
                     st.session_state.summary_df = pd.DataFrame(summary_table)[cols]
 
@@ -376,7 +372,6 @@ if uploaded_file is not None:
                 st.markdown("#### Methods Summary Table")
                 st.dataframe(st.session_state.summary_df, use_container_width=True, hide_index=True)
             else:
-                # Fixed Method Selection mapping
                 selected_methods = [{"name": m['name'], "df": m['df'], "fig": fig3} for m in st.session_state.generated_methods]
 
             st.divider()
@@ -393,11 +388,9 @@ if uploaded_file is not None:
                     
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                         for m in selected_methods:
-                            # Generate strict Bruker text format
                             bruker_str = to_bruker_format(m['df'], b['im_min'], b['im_max'])
                             zf.writestr(f"{m['name']}.txt", bruker_str)
                             
-                            # Kaleido Safety Net
                             try:
                                 img_bytes = m['fig'].to_image(format="png", width=800, height=600)
                                 zf.writestr(f"{m['name']}_Plot.png", img_bytes)
