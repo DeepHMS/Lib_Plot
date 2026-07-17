@@ -92,8 +92,8 @@ if uploaded_file is not None:
     x_axis_min = c_x1.number_input("X Min (m/z)", value=100.0)
     x_axis_max = c_x2.number_input("X Max (m/z)", value=1800.0)
     c_y1, c_y2 = st.sidebar.columns(2)
-    y_axis_min = c_y1.number_input("Y Min (1/K0)", value=0.200, format="%.3f")
-    y_axis_max = c_y2.number_input("Y Max (1/K0)", value=2.000, format="%.3f")
+    y_axis_min = c_y1.number_input("Y Min (1/K0)", value=0.2, format="%.3f")
+    y_axis_max = c_y2.number_input("Y Max (1/K0)", value=2.0, format="%.3f")
 
     st.sidebar.subheader("Bin Appearance")
     bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#9370DB")
@@ -108,16 +108,16 @@ if uploaded_file is not None:
     
     # Merged Parameters
     c1, c2, c3 = st.columns(3)
-    im_min = c1.number_input("1/K0 Min (pos.1)", value=0.60, step=0.05, format="%.2f", disabled=p1_disabled)
-    im_max = c2.number_input("1/K0 Max (pos.2)", value=1.50, step=0.05, format="%.2f", disabled=p1_disabled)
+    im_min = c1.number_input("1/K0 Min (pos.1)", value=0.6, step=0.05, format="%.2f", disabled=p1_disabled)
+    im_max = c2.number_input("1/K0 Max (pos.2)", value=1.5, step=0.05, format="%.2f", disabled=p1_disabled)
     slope_offset = c3.slider(f"Angle / Slope (Δ m/z to {im_max:.2f} 1/K0)", min_value=100, max_value=1500, value=1100, step=5, disabled=p1_disabled)
 
     c4, c5 = st.columns(2)
-    mz_min = c4.number_input("m/z Min (Left edge at pos.1)", value=100.0, step=10.0, disabled=p1_disabled)
-    mz_max = c5.number_input("m/z Max (Right edge at pos.1)", value=500.0, step=10.0, disabled=p1_disabled)
+    box_mz_min = c4.number_input("m/z Min (Left edge at pos.1)", value=100.0, step=10.0, disabled=p1_disabled)
+    box_mz_max = c5.number_input("m/z Max (Right edge at pos.1)", value=500.0, step=10.0, disabled=p1_disabled)
 
     # Calculate Box Corners
-    box_x = [mz_min, mz_max, mz_max + slope_offset, mz_min + slope_offset, mz_min]
+    box_x = [box_mz_min, box_mz_max, box_mz_max + slope_offset, box_mz_min + slope_offset, box_mz_min]
     box_y = [im_min, im_min, im_max, im_max, im_min]
 
     fig1 = go.Figure()
@@ -137,7 +137,7 @@ if uploaded_file is not None:
     c_btn1, c_btn2 = st.columns([1, 4])
     if st.session_state.phase == 1:
         if c_btn1.button("✅ Lock Boundaries & Proceed", type="primary"):
-            st.session_state.b_state = {'im_min': im_min, 'im_max': im_max, 'mz_min': mz_min, 'mz_max': mz_max, 'slope': slope_offset}
+            st.session_state.b_state = {'im_min': im_min, 'im_max': im_max, 'box_mz_min': box_mz_min, 'box_mz_max': box_mz_max, 'slope': slope_offset}
             st.session_state.phase = 2
             st.rerun()
     else:
@@ -190,8 +190,8 @@ if uploaded_file is not None:
         
         # 2. Extract strictly those inside the "Whole Box" parallelogram
         corridor_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & \
-                        (mz_vals >= (b['mz_min'] + expected_shift_global)) & \
-                        (mz_vals <= (b['mz_max'] + expected_shift_global))
+                        (mz_vals >= (b['box_mz_min'] + expected_shift_global)) & \
+                        (mz_vals <= (b['box_mz_max'] + expected_shift_global))
                         
         filtered_mz = mz_vals[corridor_mask]
         
@@ -254,7 +254,7 @@ if uploaded_file is not None:
             }
             return rects, method_df, summary
 
-        base_rects, base_df, base_summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['mz_min'], b['mz_max'], b)
+        base_rects, base_df, base_summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['box_mz_min'], b['box_mz_max'], b)
 
         fig3 = go.Figure()
         fig3.add_trace(go.Scattergl(x=plot_mz, y=plot_im, mode='markers', marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), hoverinfo='skip', showlegend=False))
@@ -321,7 +321,7 @@ if uploaded_file is not None:
                     summary_table = []
                     
                     for m_idx in range(num_methods):
-                        rects, b_df, summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['mz_min'], b['mz_max'], b, iteration=m_idx)
+                        rects, b_df, summary = generate_diagonal_logic(projected_mz_at_pos1, p['num_windows'], p['method_type'], b['box_mz_min'], b['box_mz_max'], b, iteration=m_idx)
                         
                         summary["Method"] = f"Variable_Method_{m_idx + 1}"
                         summary_table.append(summary)
