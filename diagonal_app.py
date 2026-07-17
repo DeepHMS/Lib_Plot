@@ -14,7 +14,6 @@ st.markdown("Optimize quadrupole isolation windows based on pure precursor spati
 # ==========================================
 def to_bruker_format(method_df):
     """Converts the dataframe to the strict Bruker txt format."""
-    # Enforce formatting based on reference files
     header = "type, mobility pos.1 [1/K0], mass pos.1 start [m/z], mass pos.1 end [m/z], mobility pos.2 [1/K0], mass pos.2 start [m/z]\n"
     init_row = "ms,-,-,-,-,-\n"
     
@@ -52,68 +51,46 @@ if method_type == "Variable (Density-Based)":
 # Main Pipeline Logic & Visualization
 # ==========================================
 
-# Wait for user upload before showing anything
 if uploaded_file is None:
     st.info("⬅️ Please upload a .tsv library file from the sidebar to begin method development.")
 
 else:
-    # Load Data with TSV separator
+    # Load Data
     df = pd.read_csv(uploaded_file, sep='\t')
     
-    # Filter by standard limits
-    df_filtered = df[(df['m/z'] >= mz_min) & (df['m/z'] <= mz_max)].copy()
+    # --- NEW: Dynamic Column Mapping ---
+    st.sidebar.header("5. Column Mapping")
+    st.sidebar.markdown("Select the correct columns from your uploaded library.")
+    
+    columns = df.columns.tolist()
+    
+    # Try to auto-guess the columns to save the user time
+    guess_mz = next((col for col in columns if col.lower() in ['m/z', 'mz', 'precursormz', 'precursor.mz']), columns[0])
+    guess_im = next((col for col in columns if col.lower() in ['1/k0', 'ionmobility', 'mobility', 'im']), columns[min(1, len(columns)-1)])
+    
+    mz_col = st.sidebar.selectbox("Select m/z column:", columns, index=columns.index(guess_mz))
+    im_col = st.sidebar.selectbox("Select Ion Mobility column:", columns, index=columns.index(guess_im))
 
-    # ==========================================
-    # Method Calculations
-    # ==========================================
-    generated_methods = []
-    summary_data = []
+    # Filter by standard limits using the user-selected m/z column
+    df_filtered = df[(df[mz_col] >= mz_min) & (df[mz_col] <= mz_max)].copy()
 
-    if method_type == "Fixed":
-        # Fixed Arithmetic Slicing
-        step_size = (mz_max - mz_min) / num_scans
-        
-        windows = []
-        widths = []
-        for i in range(num_scans):
-            start = mz_min + (i * step_size)
-            end = start + step_size
-            pos2_start = start + slope_offset
-            
-            windows.append({
-                'Scan': i + 1,
-                'mz_start': start,
-                'mz_end': end,
-                'mz_pos2_start': pos2_start
-            })
-            widths.append(f"{step_size:.1f}")
-            
-        method_df = pd.DataFrame(windows)
-        generated_methods.append(("Fixed_Method.txt", method_df))
-        summary_data.append({"Method": "Fixed", "Isolation Widths (Th)": ", ".join(widths)})
-
+    if df_filtered.empty:
+        st.error(f"No precursors found between {mz_min} and {mz_max} in the selected column '{mz_col}'. Please check your column mapping or limits.")
     else:
-        # Variable Precursor Density Slicing
-        df_sorted = df_filtered.sort_values(by='m/z').reset_index(drop=True)
-        total_precursors = len(df_sorted)
-        precursors_per_scan = total_precursors / num_scans
-        
-        for iteration in range(num_iterations):
-            # Calculate offset for High-Throughput Iteration
-            shift = (iteration * 0.05 * precursors_per_scan)
-            
-            target_indices = [int(shift + (i * precursors_per_scan)) for i in range(num_scans + 1)]
-            target_indices = [min(idx, total_precursors - 1) for idx in target_indices]
-            
-            mz_boundaries = [df_sorted.iloc[idx]['m/z'] for idx in target_indices]
-            mz_boundaries[0] = mz_min
-            mz_boundaries[-1] = mz_max
+        # ==========================================
+        # Method Calculations
+        # ==========================================
+        generated_methods = []
+        summary_data = []
+
+        if method_type == "Fixed":
+            step_size = (mz_max - mz_min) / num_scans
             
             windows = []
             widths = []
             for i in range(num_scans):
-                start = mz_boundaries[i]
-                end = mz_boundaries[i+1]
+                start = mz_min + (i * step_size)
+                end = start + step_size
                 pos2_start = start + slope_offset
                 
                 windows.append({
@@ -122,57 +99,89 @@ else:
                     'mz_end': end,
                     'mz_pos2_start': pos2_start
                 })
-                widths.append(f"{(end - start):.2f}")
+                widths.append(f"{step_size:.1f}")
                 
             method_df = pd.DataFrame(windows)
-            method_name = f"Variable_Method_Iter_{iteration+1}.txt"
-            generated_methods.append((method_name, method_df))
-            summary_data.append({"Method": method_name, "Isolation Widths (Th)": ", ".join(widths)})
+            generated_methods.append(("Fixed_Method.txt", method_df))
+            summary_data.append({"Method": "Fixed", "Isolation Widths (Th)": ", ".join(widths)})
 
-    # ==========================================
-    # Visualization & Output
-    # ==========================================
-    col1, col2 = st.columns([2, 1])
+        else:
+            # Sort using the selected m/z column
+            df_sorted = df_filtered.sort_values(by=mz_col).reset_index(drop=True)
+            total_precursors = len(df_sorted)
+            precursors_per_scan = total_precursors / num_scans
+            
+            for iteration in range(num_iterations):
+                shift = (iteration * 0.05 * precursors_per_scan)
+                
+                target_indices = [int(shift + (i * precursors_per_scan)) for i in range(num_scans + 1)]
+                target_indices = [min(idx, total_precursors - 1) for idx in target_indices]
+                
+                mz_boundaries = [df_sorted.iloc[idx][mz_col] for idx in target_indices]
+                mz_boundaries[0] = mz_min
+                mz_boundaries[-1] = mz_max
+                
+                windows = []
+                widths = []
+                for i in range(num_scans):
+                    start = mz_boundaries[i]
+                    end = mz_boundaries[i+1]
+                    pos2_start = start + slope_offset
+                    
+                    windows.append({
+                        'Scan': i + 1,
+                        'mz_start': start,
+                        'mz_end': end,
+                        'mz_pos2_start': pos2_start
+                    })
+                    widths.append(f"{(end - start):.2f}")
+                    
+                method_df = pd.DataFrame(windows)
+                method_name = f"Variable_Method_Iter_{iteration+1}.txt"
+                generated_methods.append((method_name, method_df))
+                summary_data.append({"Method": method_name, "Isolation Widths (Th)": ", ".join(widths)})
 
-    with col1:
-        st.subheader("Peptide Cloud Density & Isolation Windows")
-        
-        # Plotly 2D Histogram/Scatter
-        fig = px.density_heatmap(df_filtered, x='m/z', y='1/K0', nbinsx=100, nbinsy=100, 
-                                 color_continuous_scale="Viridis", 
-                                 title="Precursor Spatial Density")
-        
-        # Draw the windows of the FIRST generated method to the plot
-        if generated_methods:
-            first_method = generated_methods[0][1]
-            for _, row in first_method.iterrows():
-                # Add vertical isolation lines mapped to the 0.6 to 1.5 slope geometry
-                fig.add_shape(type="line",
-                    x0=row['mz_start'], y0=0.60, x1=row['mz_pos2_start'], y1=1.50,
-                    line=dict(color="red", width=1, dash="dash")
+        # ==========================================
+        # Visualization & Output
+        # ==========================================
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            st.subheader("Peptide Cloud Density & Isolation Windows")
+            
+            # Plot using the selected m/z and mobility columns
+            fig = px.density_heatmap(df_filtered, x=mz_col, y=im_col, nbinsx=100, nbinsy=100, 
+                                     color_continuous_scale="Viridis", 
+                                     title="Precursor Spatial Density")
+            
+            if generated_methods:
+                first_method = generated_methods[0][1]
+                for _, row in first_method.iterrows():
+                    fig.add_shape(type="line",
+                        x0=row['mz_start'], y0=0.60, x1=row['mz_pos2_start'], y1=1.50,
+                        line=dict(color="red", width=1, dash="dash")
+                    )
+                    fig.add_shape(type="line",
+                        x0=row['mz_end'], y0=0.60, x1=row['mz_pos2_start'] + (row['mz_end']-row['mz_start']), y1=1.50,
+                        line=dict(color="red", width=1, dash="dash")
+                    )
+
+            fig.update_layout(yaxis_range=[0.6, 1.5], xaxis_range=[mz_min, mz_max])
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.subheader("Generated Summary")
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, hide_index=True)
+            
+            st.subheader("Download Methods")
+            st.markdown("Files are formatted strictly for Bruker timsControl import.")
+            
+            for filename, m_df in generated_methods:
+                bruker_string = to_bruker_format(m_df)
+                st.download_button(
+                    label=f"Download {filename}",
+                    data=bruker_string,
+                    file_name=filename,
+                    mime="text/csv"
                 )
-                # End boundary
-                fig.add_shape(type="line",
-                    x0=row['mz_end'], y0=0.60, x1=row['mz_pos2_start'] + (row['mz_end']-row['mz_start']), y1=1.50,
-                    line=dict(color="red", width=1, dash="dash")
-                )
-
-        fig.update_layout(yaxis_range=[0.6, 1.5], xaxis_range=[mz_min, mz_max])
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.subheader("Generated Summary")
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, hide_index=True)
-        
-        st.subheader("Download Methods")
-        st.markdown("Files are formatted strictly for Bruker timsControl import.")
-        
-        for filename, m_df in generated_methods:
-            bruker_string = to_bruker_format(m_df)
-            st.download_button(
-                label=f"Download {filename}",
-                data=bruker_string,
-                file_name=filename,
-                mime="text/csv"
-            )
