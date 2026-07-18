@@ -9,42 +9,24 @@ import zipfile
 # ==========================================
 # 1. Streamlit Page Configuration
 # ==========================================
-st.set_page_config(page_title="Slice DIA-PASEF Optimization", layout="wide")
-st.title("Slice DIA-PASEF Method Development")
-st.markdown("Generate fixed, vertical rectangular quadrupole isolation slices for DIA-PASEF.")
+st.set_page_config(page_title="py_SLICER PASEF Optimization", layout="wide")
+st.markdown("<h2 style='text-align: center; margin-bottom: 40px;'>py_SLICER</h2>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>Generate fixed, stepped rectangular quadrupole isolation slices for DIA-PASEF.</p>", unsafe_allow_html=True)
 
-# --- INITIALIZE SESSION STATE ---
-if 'phase' not in st.session_state:
-    st.session_state.phase = 1
-if 'b_state' not in st.session_state:
-    st.session_state.b_state = {}
-if 'p_state' not in st.session_state:
-    st.session_state.p_state = {}
-
-def reset_app():
-    st.session_state.phase = 1
-    st.session_state.b_state = {}
-    st.session_state.p_state = {}
-
+# Helper function to convert Hex + Opacity into RGBA for Plotly fills
 def hex_to_rgba(hex_color, opacity):
-    """Convert Hex + Opacity into RGBA for Plotly fills."""
     hex_color = hex_color.lstrip('#')
     r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
     return f"rgba({r}, {g}, {b}, {opacity})"
 
-def to_bruker_slice_format(method_df, im_min, im_max):
-    """
-    Converts the dataframe to the strict Bruker txt format.
-    For Slice-PASEF (vertical rectangles), pos.1 m/z and pos.2 m/z are identical.
-    """
-    header = "type, mobility pos.1 [1/K0], mass pos.1 start [m/z], mass pos.1 end [m/z], mobility pos.2 [1/K0], mass pos.2 start [m/z]\n"
-    init_row = "ms,-,-,-,-,-\n"
-    lines = [header, init_row]
-    for _, row in method_df.iterrows():
-        # mz_pos2_start is identical to mz_start for a perfect vertical slice
-        line = f"diagonal,{im_min:.2f},{row['mz_start']:.1f},{row['mz_end']:.1f},{im_max:.2f},{row['mz_start']:.1f}\n"
-        lines.append(line)
-    return "".join(lines)
+def to_slice_format(df_rows):
+    """Converts the generated dictionary rows to the strict text format."""
+    lines = ["#MS Type,Cycle Id,Start IM [1/K0],End IM [1/K0],Start Mass [m/z],End Mass [m/z],CE [eV]"]
+    lines.append("MS1,0,-,-,-,-,-")
+    for row in df_rows:
+        lines.append(f"{row['MS Type']},{row['Cycle Id']},{row['Start IM [1/K0]']},{row['End IM [1/K0]']},"
+                     f"{row['Start Mass [m/z]']},{row['End Mass [m/z]']},{row['CE [eV]']}")
+    return "\n".join(lines)
 
 # --- CACHED DATA PROCESSING ---
 @st.cache_data
@@ -64,7 +46,7 @@ def load_and_process_data(file):
     mz_vals = precursors[mz_col].values
     im_vals = precursors[im_col].values
 
-    # Performance Fix: Downsample for plotting and KDE if dataset is massive
+    # Downsample for plotting and KDE if dataset is massive to prevent lag
     if len(mz_vals) > 10000:
         np.random.seed(42)
         idx = np.random.choice(len(mz_vals), 10000, replace=False)
@@ -83,7 +65,7 @@ def load_and_process_data(file):
 # 2. APP LAYOUT & SIDEBAR
 # ==========================================
 st.sidebar.header("1. Upload Library")
-uploaded_file = st.sidebar.file_uploader("Upload .tsv file", type=['tsv', 'txt', 'csv'], on_change=reset_app)
+uploaded_file = st.sidebar.file_uploader("Upload .tsv file", type=['tsv', 'txt', 'csv'])
 
 if uploaded_file is not None:
     with st.spinner("Processing data..."):
@@ -92,7 +74,6 @@ if uploaded_file is not None:
     st.sidebar.header("2. Plot Appearance & Axis Limits")
     marker_size = st.sidebar.slider("Precursor Marker Size", min_value=1, max_value=15, value=8, step=1)
     
-    st.sidebar.subheader("Axis Limits")
     c_x1, c_x2 = st.sidebar.columns(2)
     x_axis_min = c_x1.number_input("X Min (m/z)", value=100.0)
     x_axis_max = c_x2.number_input("X Max (m/z)", value=1800.0)
@@ -100,174 +81,136 @@ if uploaded_file is not None:
     y_axis_min = c_y1.number_input("Y Min (1/K0)", value=0.200, format="%.3f")
     y_axis_max = c_y2.number_input("Y Max (1/K0)", value=2.000, format="%.3f")
 
-    st.sidebar.subheader("Bin Appearance")
-    bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#2E8B57") # Changed default to SeaGreen for differentiation
-    bin_opacity = st.sidebar.slider("Bin Fill Opacity", min_value=0.0, max_value=1.0, value=0.4, step=0.05)
+    bin_color_hex = st.sidebar.color_picker("Bin Edge & Fill Color", value="#FF4B4B")
+    bin_opacity = st.sidebar.slider("Bin Fill Opacity", min_value=0.0, max_value=1.0, value=0.2, step=0.05)
     bin_fill_rgba = hex_to_rgba(bin_color_hex, bin_opacity)
 
-    # ==========================================
-    # PHASE 1: SET RECTANGULAR BOUNDARIES
-    # ==========================================
-    st.markdown("### Step 1: Set Slice Boundaries (The Bounding Box)")
-    p1_disabled = st.session_state.phase > 1
+    st.sidebar.markdown("---")
+    st.sidebar.header("3. py_SLICER Parameters")
     
-    c1, c2, c3, c4 = st.columns(4)
-    im_min = c1.number_input("1/K0 Min (Bottom Edge)", value=0.60, step=0.05, format="%.2f", disabled=p1_disabled)
-    im_max = c2.number_input("1/K0 Max (Top Edge)", value=1.50, step=0.05, format="%.2f", disabled=p1_disabled)
-    mz_min = c3.number_input("m/z Min (Left Edge)", value=400.0, step=10.0, disabled=p1_disabled)
-    mz_max = c4.number_input("m/z Max (Right Edge)", value=1000.0, step=10.0, disabled=p1_disabled)
-
-    # Calculate Rectangular Box Corners
-    box_x = [mz_min, mz_max, mz_max, mz_min, mz_min]
-    box_y = [im_min, im_min, im_max, im_max, im_min]
-
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scattergl(
-        x=plot_mz, y=plot_im, mode='markers', 
-        marker=dict(color=density, colorscale='Jet', opacity=0.6, size=marker_size), 
-        name='Precursors', hovertemplate='<b>m/z:</b> %{x:.2f}<br><b>1/K0:</b> %{y:.4f}<extra></extra>'
-    ))
+    # Exact mapping of user's requested widgets
+    cycles = st.sidebar.slider("Cycles", min_value=1, max_value=10, value=5, step=1)
+    im_start = st.sidebar.slider("IM Start [1/K0]", min_value=0.60, max_value=1.60, value=0.60, step=0.05)
+    im_end = st.sidebar.slider("IM End [1/K0]", min_value=0.60, max_value=1.60, value=1.40, step=0.05)
+    im_step_vertical = st.sidebar.number_input("IM Step Vertical", value=0.05, step=0.01)
+    im_step_horizontal = st.sidebar.number_input("IM Step Horizontal", value=0.05, step=0.01)
     
-    # Draw the Bounding Rectangle
-    fig1.add_trace(go.Scatter(
-        x=box_x, y=box_y, 
-        mode='lines', line=dict(color='red', width=3), 
-        fill='toself', fillcolor='rgba(255, 0, 0, 0.1)',
-        name='Boundary Box', hoverinfo='skip'
-    ))
+    mass_start = st.sidebar.slider("Mass Start [m/z]", min_value=100, max_value=1700, value=250, step=10)
+    mass_end = st.sidebar.slider("Mass End [m/z]", min_value=100, max_value=1700, value=1320, step=10)
+    mass_step_vertical = st.sidebar.number_input("Mass Step Vertical", value=55.0, step=1.0)
+    mass_step_horizontal = st.sidebar.number_input("Mass Step Horizontal", value=300.0, step=10.0)
+
+    # ==========================================
+    # 3. METHOD GENERATION LOGIC
+    # ==========================================
+    df_rows = []
+    plot_rects = []
     
-    fig1.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
-    st.plotly_chart(fig1, use_container_width=True)
+    # Strict implementation of the provided stepwise algorithm
+    num_steps = int(round((im_end - im_start) / im_step_vertical, 4)) + 1
 
-    c_btn1, c_btn2 = st.columns([1, 4])
-    if st.session_state.phase == 1:
-        if c_btn1.button("✅ Lock Boundaries & Proceed", type="primary"):
-            st.session_state.b_state = {'im_min': im_min, 'im_max': im_max, 'mz_min': mz_min, 'mz_max': mz_max}
-            st.session_state.phase = 2
-            st.rerun()
-    else:
-        if c_btn1.button("🔓 Unlock & Edit Boundaries"):
-            st.session_state.phase = 1
-            st.rerun()
-
-    # ==========================================
-    # PHASE 2: SLICING STRATEGY
-    # ==========================================
-    if st.session_state.phase >= 2:
-        st.markdown("---")
-        st.markdown("### Step 2: Slicing Strategy")
-        p2_disabled = st.session_state.phase > 2
+    for cycle in range(1, cycles + 1):
+        current_im = im_start
+        current_mass = mass_start
         
-        c1, c2 = st.columns([1, 3])
-        num_windows = c1.slider("Number of Vertical Slices (MS/MS Scans)", min_value=1, max_value=30, value=8, step=1, disabled=p2_disabled)
-        
-        if p2_disabled:
-            num_windows = st.session_state.p_state['num_windows']
-
-        c_btn1, c_btn2 = st.columns([2, 4])
-        if st.session_state.phase == 2:
-            if c_btn1.button("🚀 Generate Fixed Slices", type="primary"):
-                st.session_state.p_state = {'num_windows': num_windows}
-                st.session_state.phase = 3
-                st.rerun()
-        else:
-            if c_btn1.button("🔓 Unlock & Edit Strategy"):
-                st.session_state.phase = 2
-                st.rerun()
-
-    # ==========================================
-    # PHASE 3: METHOD GENERATION & EXPORT
-    # ==========================================
-    if st.session_state.phase >= 3:
-        st.markdown("---")
-        st.markdown("### Step 3: Base Method Generation & Export")
-        
-        b = st.session_state.b_state
-        p = st.session_state.p_state
-        
-        # Mathematical Logic for Fixed Slicing
-        step_size = (b['mz_max'] - b['mz_min']) / p['num_windows']
-        
-        windows = []
-        widths = []
-        rects = []
-        
-        for i in range(p['num_windows']):
-            start = b['mz_min'] + (i * step_size)
-            end = start + step_size
+        for _ in range(num_steps):
+            if current_im >= im_end:
+                break
+                
+            im_end_current = min(im_end, current_im + im_step_vertical)
+            mass_end_current = min(mass_end, current_mass + mass_step_horizontal)
             
-            windows.append({
-                'Scan': i + 1, 
-                'mz_start': start, 
-                'mz_end': end
+            # Export payload
+            df_rows.append({
+                'MS Type': 'PASEF',
+                'Cycle Id': cycle,
+                'Start IM [1/K0]': f"{current_im:.4f}",
+                'End IM [1/K0]': f"{im_end_current:.4f}",
+                'Start Mass [m/z]': f"{current_mass:.2f}",
+                'End Mass [m/z]': f"{mass_end_current:.2f}",
+                'CE [eV]': '-'
             })
-            widths.append(f"{step_size:.1f}")
-            rects.append((start, end))
+            
+            # Record coordinates for the Plotly visualizer (only need cycle 1 to avoid overdrawing identical shapes)
+            if cycle == 1:
+                plot_rects.append((current_mass, mass_end_current, current_im, im_end_current))
+                
+            current_im = im_end_current
+            current_mass += mass_step_vertical
+            if current_mass > mass_end:
+                current_mass = mass_end
 
-        method_df = pd.DataFrame(windows)
-        summary = {
-            "Method": "Fixed_Slice_PASEF",
-            "Scans": p['num_windows'],
-            "Mass Range (m/z)": f"{b['mz_min']:.1f} - {b['mz_max']:.1f}",
-            "Isolation Widths (Th)": ", ".join(widths)
-        }
+    # ==========================================
+    # 4. VISUALIZATION
+    # ==========================================
+    fig = go.Figure()
+    
+    # Base precursor cloud
+    fig.add_trace(go.Scattergl(
+        x=plot_mz, y=plot_im, mode='markers', 
+        marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), 
+        hoverinfo='skip', showlegend=False
+    ))
+    
+    # Draw Stepped Slices
+    for i, (m1_start, m1_end, im1_start, im1_end) in enumerate(plot_rects):
+        x_pts = [m1_start, m1_end, m1_end, m1_start, m1_start]
+        y_pts = [im1_start, im1_start, im1_end, im1_end, im1_start]
         
-        # Visualization
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scattergl(
-            x=plot_mz, y=plot_im, mode='markers', 
-            marker=dict(color=density, colorscale='Jet', opacity=0.5, size=marker_size), 
-            hoverinfo='skip', showlegend=False
+        # Count precise library precursors captured in this specific rectangular slice
+        bin_mask = (im_vals >= im1_start) & (im_vals <= im1_end) & (mz_vals >= m1_start) & (mz_vals <= m1_end)
+        prec_count = np.sum(bin_mask)
+        
+        hover_text = (f"<b>Slice {i+1}</b><br>"
+                      f"Precursors: {prec_count}<br>"
+                      f"m/z Limits: {m1_start:.2f} - {m1_end:.2f}<br>"
+                      f"IM Limits: {im1_start:.4f} - {im1_end:.4f}")
+        
+        fig.add_trace(go.Scatter(
+            x=x_pts, y=y_pts, 
+            mode='lines', line=dict(color=bin_color_hex, width=1.5), 
+            fill='toself', fillcolor=bin_fill_rgba, 
+            text=hover_text, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Slice {i+1}", showlegend=False
         ))
-        
-        for i, (m1_start, m1_end) in enumerate(rects):
-            x_pts = [m1_start, m1_end, m1_end, m1_start, m1_start]
-            y_pts = [b['im_min'], b['im_min'], b['im_max'], b['im_max'], b['im_min']]
-            
-            # Count precise precursors in this purely vertical slice
-            bin_mask = (im_vals >= b['im_min']) & (im_vals <= b['im_max']) & (mz_vals >= m1_start) & (mz_vals <= m1_end)
-            prec_count = np.sum(bin_mask)
-            
-            hover_text = (f"<b>Scan {i+1}</b><br>"
-                          f"Precursors: {prec_count}<br>"
-                          f"m/z Limits: {m1_start:.2f} - {m1_end:.2f}<br>"
-                          f"Width: {(m1_end - m1_start):.2f} Th")
-            
-            fig3.add_trace(go.Scatter(
-                x=x_pts, y=y_pts, 
-                mode='lines', line=dict(color=bin_color_hex, width=1), 
-                fill='toself', fillcolor=bin_fill_rgba, 
-                text=hover_text, hovertemplate="%{text}<extra></extra>", hoveron='fills', name=f"Scan {i+1}", showlegend=False
-            ))
-        
-        fig3.update_layout(xaxis=dict(range=[x_axis_min, x_axis_max]), yaxis=dict(range=[y_axis_min, y_axis_max]), height=500, margin=dict(t=10, b=10))
-        st.plotly_chart(fig3, use_container_width=True)
+    
+    # Apply standard view constraints
+    fig.update_layout(
+        xaxis=dict(range=[x_axis_min, x_axis_max], title="m/z"), 
+        yaxis=dict(range=[y_axis_min, y_axis_max], title="1/K0"), 
+        height=650, margin=dict(t=30, b=30),
+        annotations=[
+            dict(x=0.02, y=0.98, xref='paper', yref='paper', text=f"Number of Cycles = {cycles}", showarrow=False, align='left', bgcolor="rgba(255,255,255,0.7)"),
+            dict(x=0.98, y=0.02, xref='paper', yref='paper', text=f"Total Entries = {1 + len(df_rows)} (1 MS1 + {len(df_rows)} MS2)", showarrow=False, align='right', bgcolor="rgba(255,255,255,0.7)")
+        ]
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("#### Method Summary")
-        summary_df = pd.DataFrame([summary])
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    # ==========================================
+    # 5. EXPORT & DOWNLOAD
+    # ==========================================
+    st.divider()
+    c_d1, c_d2 = st.columns([1, 1])
+    
+    # Preview generated data
+    method_df = pd.DataFrame(df_rows)
+    with st.expander("Preview Generated Method Table"):
+        st.dataframe(method_df, use_container_width=True, hide_index=True)
 
-        # Export Block
-        st.divider()
-        c_d1, c_d2 = st.columns(2)
-        
-        csv_table = summary_df.to_csv(index=False)
-        c_d1.download_button("📊 Download Summary Table (.csv)", data=csv_table, file_name="Slice_Method_Summary.csv", mime="text/csv", use_container_width=True)
-
-        if c_d2.button("🗜️ Prepare Method & Plot for Download", use_container_width=True):
-            with st.spinner("Compiling ZIP file..."):
-                zip_buffer = io.BytesIO()
+    if c_d1.button("🗜️ Download Method & Plot (ZIP)", use_container_width=True, type="primary"):
+        with st.spinner("Compiling ZIP file..."):
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                # Write formatted text file
+                bruker_str = to_slice_format(df_rows)
+                zf.writestr("pasef_method_output.txt", bruker_str)
                 
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    # Write Bruker text file
-                    bruker_str = to_bruker_slice_format(method_df, b['im_min'], b['im_max'])
-                    zf.writestr("Fixed_Slice_Method.txt", bruker_str)
-                    
-                    # Write HTML Plot
-                    html_bytes = fig3.to_html(include_plotlyjs='cdn').encode('utf-8')
-                    zf.writestr("Fixed_Slice_Plot.html", html_bytes)
-                
-                st.download_button("📥 Click Here to Download Final ZIP", data=zip_buffer.getvalue(), file_name="Slice_PASEF_Method.zip", mime="application/zip")
+                # Write HTML Plot
+                html_bytes = fig.to_html(include_plotlyjs='cdn').encode('utf-8')
+                zf.writestr("slice-pasef_plot.html", html_bytes)
+            
+            st.download_button("📥 Click Here to Download Final ZIP", data=zip_buffer.getvalue(), file_name="py_SLICER_Method.zip", mime="application/zip")
 
 else:
     st.info("👈 Please upload a proteomics library (.tsv) file in the sidebar to begin.")
